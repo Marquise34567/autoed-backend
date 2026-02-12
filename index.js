@@ -159,8 +159,39 @@ app.use(express.json({ limit: '10mb' }))
 app.get('/health', (_req, res) => res.json({ status: 'ok' }))
 app.get('/', (_req, res) => res.json({ message: 'autoed-backend-ready' }))
 
+// Temporary test endpoint for jobs (helps diagnose Cannot POST /jobs)
+app.post('/jobs', async (req, res) => {
+  console.log('[jobs] POST /jobs received', { body: req.body })
+  return res.json({ success: true })
+})
+
+// Log all registered routes to help debugging and deployments
+function logRegisteredRoutes() {
+  try {
+    const routes = []
+    const stack = (app._router && app._router.stack) || []
+    stack.forEach((layer) => {
+      if (layer.route && layer.route.path) {
+        const methods = Object.keys(layer.route.methods).join(',').toUpperCase()
+        routes.push(`${methods} ${layer.route.path}`)
+      } else if (layer.name === 'router' && layer.handle && layer.handle.stack) {
+        layer.handle.stack.forEach((nested) => {
+          if (nested.route && nested.route.path) {
+            const methods = Object.keys(nested.route.methods).join(',').toUpperCase()
+            routes.push(`${methods} ${nested.route.path}`)
+          }
+        })
+      }
+    })
+    console.log('[routes] Registered routes:\n' + routes.join('\n'))
+  } catch (e) {
+    console.warn('[routes] Failed to enumerate routes', e)
+  }
+}
+
 // Bind to the PORT environment variable (Railway sets this) or fallback for local dev
 const port = process.env.PORT || 5000
 app.listen(port, () => {
   console.log('Server running on port', port)
+  logRegisteredRoutes()
 })
