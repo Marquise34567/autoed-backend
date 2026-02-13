@@ -8,7 +8,8 @@ const express = require('express')
 console.log('✅ Booting backend entry:', __filename)
 
 // Deploy marker to verify production has the latest code
-console.log('DEPLOY_MARKER:', new Date().toISOString())
+const DEPLOY_MARKER = process.env.DEPLOY_MARKER || new Date().toISOString()
+console.log('DEPLOY_MARKER:', DEPLOY_MARKER)
 
 const app = express()
 
@@ -283,6 +284,11 @@ app.use((err, req, res, next) => {
 // Standard health + root endpoints under /api
 app.get('/api/health', (_req, res) => res.json({ status: 'ok' }))
 app.get('/', (_req, res) => res.json({ message: 'autoed-backend-ready' }))
+
+// Diagnostic: deployment marker to confirm which code is running in production
+app.get('/__deploy', (_req, res) => {
+  return res.json({ ok: true, deploy: DEPLOY_MARKER })
+})
 
 // Minimal fallbacks so endpoints respond even if route modules aren't mounted in the image
 app.get('/api/ping', (_req, res) => res.json({ pong: true }))
