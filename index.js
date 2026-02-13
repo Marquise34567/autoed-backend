@@ -317,6 +317,12 @@ app.use('/api/jobs', require('./routes/jobs'))
 app.use('/api/job-status', require('./routes/job-status'))
 app.use('/api/userdoc', require('./routes/userdoc'))
 app.use('/api/upload-url', require('./routes/upload-url'))
+// Debug routes for validating signed URL behavior
+try {
+  app.use('/api/debug', require('./routes/debug/signed-put-test'))
+} catch (e) {
+  console.warn('[debug routes] failed to mount debug routes', e && e.message ? e.message : e)
+}
 
 // Ensure a minimal /api/jobs GET exists so frontends don't get 404.
 // If a router was mounted above it will handle requests; this is a safe fallback.

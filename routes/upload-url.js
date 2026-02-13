@@ -60,8 +60,14 @@ router.post('/', async (req, res) => {
         return res.status(500).json({ error: 'SIGNED_URL_FAILED', details: 'signedUrl undefined' })
       }
 
-      // Return consistent contract required by frontend
-      return res.status(200).json({ signedUrl, path: destPath, publicUrl: null })
+      // Build required headers contract for the frontend
+      const requiredHeaders = {
+        'Content-Type': ct,
+      }
+
+      // Log bucket name and return contract including required headers
+      console.log(`[upload-url:${requestId}] returning signedUrl for bucket:`, bucket.name)
+      return res.status(200).json({ signedUrl, path: destPath, publicUrl: null, requiredHeaders, bucket: bucket.name })
     } catch (err) {
       // Log non-sensitive error info
       console.error(`[upload-url:${requestId}] firebase error:`, err && (err.message || err))

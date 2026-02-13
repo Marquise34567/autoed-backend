@@ -19,8 +19,13 @@ function Uploader(){
       if (!json.signedUrl) throw new Error('No signedUrl in response')
 
       setStatus('uploading')
-      const putResp = await fetch(json.signedUrl, { method: 'PUT', headers: { 'Content-Type': body.contentType }, body: file })
-      if (!putResp.ok) throw new Error(`Upload failed: ${putResp.status}`)
+      // Use requiredHeaders from backend if provided to ensure signature matches
+      const headers = Object.assign({}, json.requiredHeaders || {}, { 'Content-Type': body.contentType })
+      const putResp = await fetch(json.signedUrl, { method: 'PUT', headers, body: file, credentials: 'omit' })
+      if (!putResp.ok) {
+        const text = await putResp.text()
+        throw new Error(`Upload failed: ${putResp.status} ${text}`)
+      }
       setStatus('uploaded')
     } catch (e: any) {
       setStatus('error: ' + (e && e.message ? e.message : String(e)))
