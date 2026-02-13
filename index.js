@@ -42,6 +42,25 @@ app.use((req, res, next) => {
   next();
 });
 
+// Temporary permissive debug CORS handler for production diagnosis.
+// It always responds 204 to OPTIONS and echoes a lightweight debug route
+// at `/api/cors-debug`. Remove this after verifying Railway routing.
+app.use((req, res, next) => {
+  if (req.method === 'OPTIONS') {
+    res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*')
+    res.setHeader('Vary', 'Origin')
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS')
+    res.setHeader('Access-Control-Allow-Headers', req.headers['access-control-request-headers'] || 'Content-Type, Authorization')
+    res.setHeader('Access-Control-Max-Age', '86400')
+    return res.sendStatus(204)
+  }
+  next()
+})
+
+app.get('/api/cors-debug', (req, res) => {
+  return res.json({ ok: true, deploy: DEPLOY_MARKER, origin: req.headers.origin || null })
+})
+
 // CORS: use the standard `cors` middleware with a tight allowlist for the
 // production frontend origins. This is mounted globally BEFORE any routes
 // (including the webhook) so preflight and normal requests get consistent
