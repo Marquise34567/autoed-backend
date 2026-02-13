@@ -229,9 +229,9 @@ const corsOptions = {
     // Allow server-to-server or non-browser requests with no Origin header
     if (!origin) return callback(null, true)
     if (allowedOrigins.indexOf(origin) !== -1) return callback(null, true)
-    // Disallow anything else
+    // Disallow anything else: signal CORS not allowed (no exception)
     console.warn('[cors] blocked origin:', origin)
-    return callback(new Error('Not allowed by CORS'))
+    return callback(null, false)
   },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
