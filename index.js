@@ -201,59 +201,39 @@ app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res)
 // so API routes receive parsed bodies (webhook above still uses raw).
 app.use(express.json({ limit: '20mb' }))
 app.use(express.urlencoded({ extended: true }))
-
-// Quick-permissive OPTIONS handler: respond to preflight immediately with
-// Access-Control-Allow-* headers. This ensures browsers always get a valid
-// preflight response while we refine allowlist behavior.
+// Logging middleware: log incoming requests and final status for diagnosis
 app.use((req, res, next) => {
-  if (req.method !== 'OPTIONS') return next()
-  const origin = req.headers.origin || '*'
-  res.setHeader('Access-Control-Allow-Origin', origin)
-  res.setHeader('Vary', 'Origin')
-  res.setHeader('Access-Control-Allow-Credentials', 'true')
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS')
-  const reqHeaders = req.headers['access-control-request-headers']
-  res.setHeader('Access-Control-Allow-Headers', reqHeaders || 'Content-Type, Authorization')
-  return res.sendStatus(204)
-})
-
-// Reflect origin for all responses to ensure browsers see Access-Control-Allow-Origin
-// This is permissive and intended to unblock the pipeline; tighten later.
-app.use((req, res, next) => {
-  const origin = req.headers.origin
-  if (origin) {
-    res.setHeader('Access-Control-Allow-Origin', origin)
-    res.setHeader('Vary', 'Origin')
-    res.setHeader('Access-Control-Allow-Credentials', 'true')
-  }
+  const start = Date.now()
+  const origin = req.headers.origin || '<no-origin>'
+  console.log(`[req] ${req.method} ${req.path} origin=${origin}`)
+  res.on('finish', () => {
+    const ms = Date.now() - start
+    console.log(`[res] ${req.method} ${req.path} origin=${origin} status=${res.statusCode} time=${ms}ms`)
+  })
   next()
 })
 
+// CORS allowlist for API routes only. Must be mounted BEFORE any /api routes.
 const allowedOrigins = new Set([
-  "https://autoeditor.app",
-  "https://www.autoeditor.app",
-]);
+  'https://autoeditor.app',
+  'https://www.autoeditor.app',
+])
 
-const corsOptionsForNonOptions = {
+const corsOptions = {
   origin: function (origin, cb) {
     // Allow server-to-server or no-origin requests
-    if (!origin) return cb(null, true);
-
-    // Allow exact configured origins
-    if (allowedOrigins.has(origin)) return cb(null, true);
-
-    // As a pragmatic fallback to get the pipeline running, allow any
-    // secure (https) origin. This is intentionally permissive and can be
-    // tightened later if desired.
-    if (/^https:\/\//i.test(origin)) return cb(null, true);
-
-    console.warn('[cors] blocked origin:', origin)
-    return cb(new Error("CORS blocked for origin: " + origin));
+    if (!origin) return cb(null, true)
+    if (allowedOrigins.has(origin)) return cb(null, true)
+    return cb(new Error('Not allowed by CORS'))
   },
   credentials: true,
-  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
 }
+
+// Mount CORS for all /api routes
+app.options(/\/api\/.*/, cors(corsOptions))
+app.use('/api', cors(corsOptions))
 
 // Correct universal preflight handler: respond permissively to OPTIONS so
 // browsers receive Access-Control-Allow-* headers during preflight even if
