@@ -2,13 +2,22 @@ const express = require('express')
 const mimeLib = require('mime-types')
 const router = express.Router()
 
-// Try to reuse Firebase admin storage if available
+// Helper: initialize admin from utils (handles service account envs)
 let admin = null
 try {
   admin = require('../utils/firebaseAdmin')
 } catch (e) {
   admin = null
 }
+
+/*
+  Test with curl:
+  curl -X POST https://your-backend.example.com/api/upload-url \
+    -H "Content-Type: application/json" \
+    -d '{"filename":"video.mp4","contentType":"video/mp4"}'
+
+  Response: { ok:true, signedUrl:"<PUT_URL>", path:"uploads/<ts>-video.mp4", bucket:"<bucket-name>" }
+*/
 
 router.post('/', async (req, res) => {
   try {
@@ -26,7 +35,7 @@ router.post('/', async (req, res) => {
       const bucketName = process.env.FIREBASE_STORAGE_BUCKET || undefined
       const bucket = bucketName ? admin.storage().bucket(bucketName) : admin.storage().bucket()
 
-      // generate unique path
+      // generate unique, safe path
       const safeFilename = String(filename).replace(/[^a-zA-Z0-9._-]/g, '_')
       const destPath = `uploads/${Date.now()}-${safeFilename}`
 
@@ -40,16 +49,24 @@ router.post('/', async (req, res) => {
         contentType: ct,
       })
 
-      return res.json({ ok: true, uploadUrl: url, path: destPath })
+      return res.json({ ok: true, signedUrl: url, path: destPath, bucket: bucket.name })
     } catch (err) {
-      // Do not log private keys or sensitive envs
-      console.error('[upload-url] firebase error:', err && err.message)
-      return res.status(500).json({ ok: false, error: err && err.message ? err.message : 'Firebase error' })
+      // Log non-sensitive error info
+      console.error('[upload-url] firebase error:', err && (err.message || err))
+      return res.status(500).json({ ok: false, error: 'Failed to generate signed URL', details: err && err.message ? err.message : String(err) })
     }
   } catch (err) {
     console.error('[upload-url] handler error', err && (err.stack || err.message || err))
     return res.status(500).json({ ok: false, error: err && err.message ? err.message : 'Internal server error' })
   }
+})
+
+// Ensure OPTIONS preflight is handled for CORS (explicitly allow headers used by client)
+router.options('/', (req, res) => {
+  res.set('Access-Control-Allow-Methods', 'POST,OPTIONS')
+  res.set('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+  res.set('Access-Control-Allow-Credentials', 'true')
+  return res.sendStatus(204)
 })
 
 module.exports = router

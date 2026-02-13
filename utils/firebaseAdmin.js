@@ -32,7 +32,20 @@ function getCredential() {
 if (!admin.apps.length) {
   const credential = getCredential()
   if (credential) {
-    admin.initializeApp({ credential })
+    // Determine storage bucket: prefer explicit env var, fallback to <projectId>.appspot.com
+    const explicitBucket = process.env.FIREBASE_STORAGE_BUCKET || undefined
+    const fallbackBucket = process.env.FIREBASE_PROJECT_ID ? `${process.env.FIREBASE_PROJECT_ID}.appspot.com` : undefined
+    const storageBucket = explicitBucket || fallbackBucket || undefined
+
+    const initOpts = { credential }
+    if (storageBucket) initOpts.storageBucket = storageBucket
+
+    try {
+      admin.initializeApp(initOpts)
+      console.log('[firebaseAdmin] initialized', { storageBucket: storageBucket || null })
+    } catch (e) {
+      console.warn('[firebaseAdmin] initializeApp failed', e && e.message)
+    }
   } else {
     console.warn('Missing Firebase service account environment variables — Firebase admin not initialized')
   }

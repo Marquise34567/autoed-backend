@@ -275,14 +275,14 @@ app.post('/api/upload-url', (req, res) => {
         const expires = Date.now() + 15 * 60 * 1000
 
         const [url] = await file.getSignedUrl({ version: 'v4', action: 'write', expires, contentType: ct })
-        return res.json({ ok: true, uploadUrl: url, path: destPath })
+        return res.json({ ok: true, signedUrl: url, path: destPath, bucket: bucket.name })
       } catch (err) {
-        console.error('[upload-url fallback] firebase error:', err && err.message)
-        return res.status(500).json({ ok: false, error: err && err.message ? err.message : 'Firebase error' })
+        console.error('[upload-url fallback] firebase error:', err && (err.message || err))
+        return res.status(500).json({ ok: false, error: 'Failed to generate signed URL', details: err && err.message ? err.message : String(err) })
       }
     } catch (err) {
       console.error('[upload-url fallback] handler error', err && (err.stack || err.message || err))
-      return res.status(500).json({ ok: false, error: err && err.message ? err.message : 'Internal server error' })
+      return res.status(500).json({ ok: false, error: 'Internal server error', details: err && err.message ? err.message : String(err) })
     }
   })()
 })
