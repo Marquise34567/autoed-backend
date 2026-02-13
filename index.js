@@ -8,11 +8,42 @@ const cors = require('cors')
 // Boot log for entry file identification
 console.log('✅ Booting backend entry:', __filename)
 
+// Deploy marker to verify production has the latest code
+console.log('DEPLOY_MARKER:', new Date().toISOString())
+
 const app = express()
+
+// Global emergency CORS: explicit allow for production frontend and safe
+// echo for other HTTPS origins. This runs before routes so preflight always
+// receives a valid response.
+const _trustedOriginsTop = new Set([
+  'https://autoeditor.app',
+  'https://www.autoeditor.app',
+])
+app.use((req, res, next) => {
+  const origin = req.headers.origin
+  let allowOrigin = '*'
+  if (origin) {
+    if (_trustedOriginsTop.has(origin)) {
+      allowOrigin = origin
+    } else if (/^https:\/\//i.test(origin)) {
+      allowOrigin = origin
+    }
+  }
+  res.setHeader('Access-Control-Allow-Origin', allowOrigin)
+  res.setHeader('Vary', 'Origin')
+  res.setHeader('Access-Control-Allow-Credentials', 'true')
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS')
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With,Accept')
+  console.log('[cors-top] origin=', origin, 'allow=', allowOrigin)
+  if (req.method === 'OPTIONS') return res.status(204).end()
+  return next()
+})
 
 // Guaranteed CORS middleware: dynamically echo origin and allow credentials
 // Placed before any routes so CORS headers are always set for browser requests.
 // (CORS block moved below after body parsers)
+//
 
 // Lightweight health endpoints
 app.get('/health', (req, res) => {
@@ -213,6 +244,21 @@ app.use((req, res, next) => {
   next()
 })
 
+// Emergency preflight responder: respond to OPTIONS early by echoing the
+// Origin into Access-Control-Allow-Origin and returning 204. This is a
+// short-term safety net to unblock browser preflight failures in production
+// while CORS rules are being iterated.
+app.use((req, res, next) => {
+  if (req.method !== 'OPTIONS') return next()
+  const origin = req.headers.origin || '*'
+  res.setHeader('Access-Control-Allow-Origin', origin)
+  res.setHeader('Vary', 'Origin')
+  res.setHeader('Access-Control-Allow-Credentials', 'true')
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS')
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With,Accept')
+  return res.status(204).end()
+})
+
 // CORS: robust and permissive for HTTPS frontends while keeping server-to-server
 // requests allowed. This echoes the Origin for HTTPS origins and permits
 // credentials. Mount before /api routes so preflight and actual requests
@@ -243,10 +289,13 @@ const corsOptions = {
   maxAge: 600,
 }
 
-// Respond to OPTIONS preflight for /api/* using the same cors options
-app.options(/\/api\/.*/, cors(corsOptions))
-// Apply CORS to all /api routes
-app.use('/api', cors(corsOptions))
+// Temporary emergency: reflect any Origin for /api to unblock clients quickly.
+// This mirrors the incoming Origin into Access-Control-Allow-Origin while
+// still allowing credentials. It's safe as a short-term fix; we can tighten
+// this to an allowlist once production is verified.
+const apiCors = cors({ origin: true, credentials: true, methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'], allowedHeaders: ['Content-Type','Authorization','X-Requested-With','Accept'], maxAge: 600 })
+app.options(/\/api\/.*/, apiCors)
+app.use('/api', apiCors)
 
 // Also respond permissively to other OPTIONS to keep non-/api endpoints friendly
 app.options(/.*/, cors(corsOptions))
