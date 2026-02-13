@@ -232,7 +232,11 @@ const corsOptions = {
       return cb(null, true)
     }
     console.log('[cors] origin NOT allowed:', origin)
-    return cb(new Error('Not allowed by CORS'))
+    // Do not throw an error via the callback — return `false` to indicate
+    // the origin is not allowed. Throwing an Error here causes the CORS
+    // middleware to surface a 500. We handle rejection for non-OPTIONS
+    // requests explicitly elsewhere.
+    return cb(null, false)
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
