@@ -240,8 +240,13 @@ const corsOptions = {
 }
 
 // Mount CORS for all /api routes
-app.options(/\/api\/.*/, cors(corsOptions))
-app.use('/api', cors(corsOptions))
+// Permissive preflight: always respond with Access-Control-Allow-* for OPTIONS
+app.options(/\/api\/.*/, cors({ origin: true, credentials: true, methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'], allowedHeaders: ['Content-Type','Authorization'] }))
+// Strict CORS for non-OPTIONS requests
+app.use('/api', (req, res, next) => {
+  if (req.method === 'OPTIONS') return next()
+  return cors(corsOptions)(req, res, next)
+})
 
 // Correct universal preflight handler: respond permissively to OPTIONS so
 // browsers receive Access-Control-Allow-* headers during preflight even if
