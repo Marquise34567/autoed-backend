@@ -229,6 +229,14 @@ app.get('/', (_req, res) => res.json({ message: 'autoed-backend-ready' }))
 app.get('/api/ping', (_req, res) => res.json({ pong: true }))
 app.get('/api/userdoc', (_req, res) => res.json({ ok: true }))
 
+// Top-level POST fallback for /api/upload-url to guard against missing mounted router
+app.post('/api/upload-url', (req, res) => {
+  const { filename, contentType, mime } = req.body || {}
+  const ct = contentType || mime || null
+  if (!filename || !ct) return res.status(400).json({ ok: false, error: 'Missing filename or contentType' })
+  return res.json({ ok: true, uploadUrl: null, message: 'stub - implement signed url next' })
+})
+
 // Mount existing route folders under /api when possible (non-fatal if module isn't an Express router)
 // Mount explicit routers under /api
 app.use('/api/health', require('./routes/health'))
