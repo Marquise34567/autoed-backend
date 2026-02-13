@@ -17,7 +17,7 @@
     "express": "*",
     "firebase-admin": "*",
     "mime-types": "*",
-    "puppeteer": "^21.0.1",
     "stripe": "*"
   }
+    
 }

@@ -1,0 +1,10 @@
+node_modules
+.next
+.cache
+scripts/e2e/test-video.mp4
+*.log
+dist
+build
+.env
+service-account.json
+.venv

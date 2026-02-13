@@ -7,7 +7,16 @@ dist
 coverage
 tmp
 uploads
- 
+# Build / cache / outputs
+.next
+.cache
+renders
+dist
+build
+
+# Node
+node_modules
+
 # Firebase admin keys
 *adminsdk*.json
 serviceAccount*.json
