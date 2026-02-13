@@ -1,57 +1,73 @@
-const admin = require("firebase-admin");
-
-function parseServiceAccountEnv() {
-  const rawEnv = process.env.FIREBASE_SERVICE_ACCOUNT_JSON || process.env.FIREBASE_SERVICE_ACCOUNT
-  if (!rawEnv) return null
-  try {
-    let raw = String(rawEnv).trim()
-    // strip surrounding quotes if present
-    if ((raw.startsWith("'") && raw.endsWith("'")) || (raw.startsWith('"') && raw.endsWith('"'))) raw = raw.slice(1, -1)
-    const sa = JSON.parse(raw)
-    if (!sa) return null
-    if (sa.private_key) sa.private_key = String(sa.private_key).replace(/\\n/g, '\n')
-    return sa
-  } catch (err) {
-    console.error('[firebaseAdmin] Failed to parse FIREBASE_SERVICE_ACCOUNT_JSON', err && err.message ? err.message : err)
-    return null
-  }
-}
+const admin = require('firebase-admin')
 
 if (!admin.apps.length) {
-  // 1) Try service account JSON env first (sa JSON string)
-  const sa = parseServiceAccountEnv()
-  if (sa && sa.project_id && sa.client_email && sa.private_key) {
-    try {
-      admin.initializeApp({
-        credential: admin.credential.cert({
-          projectId: sa.project_id,
-          clientEmail: sa.client_email,
-          privateKey: sa.private_key,
-        }),
-      })
-      console.log('[firebaseAdmin] initialized via FIREBASE_SERVICE_ACCOUNT_JSON')
-    } catch (e) {
-      console.error('[firebaseAdmin] Failed to initialize from FIREBASE_SERVICE_ACCOUNT_JSON', e && e.message ? e.message : e)
-    }
-  } else {
-    // 2) Fallback to individual env vars
-    const projectId = process.env.FIREBASE_PROJECT_ID
-    const clientEmail = process.env.FIREBASE_CLIENT_EMAIL
-    const privateKey = process.env.FIREBASE_PRIVATE_KEY ? String(process.env.FIREBASE_PRIVATE_KEY).replace(/\\n/g, '\n') : null
-
-    if (!projectId || !clientEmail || !privateKey) {
-      console.error('[firebaseAdmin] Missing required Firebase env vars for fallback initialization')
-    } else {
-      try {
-        admin.initializeApp({
-          credential: admin.credential.cert({ projectId, clientEmail, privateKey }),
-        })
-        console.log('[firebaseAdmin] initialized via FIREBASE_PROJECT_ID/FIREBASE_CLIENT_EMAIL/FIREBASE_PRIVATE_KEY')
-      } catch (e) {
-        console.error('[firebaseAdmin] Failed to initialize Firebase admin from env vars', e && e.message ? e.message : e)
-      }
-    }
+  if (!process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
+    throw new Error('Missing FIREBASE_SERVICE_ACCOUNT_JSON')
   }
+
+  let serviceAccount
+  try {
+    serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON)
+  } catch (e) {
+    console.error('[firebaseAdmin] Failed to parse FIREBASE_SERVICE_ACCOUNT_JSON:', e && e.message ? e.message : e)
+    throw e
+  }
+
+  admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount),
+    storageBucket: process.env.FIREBASE_STORAGE_BUCKET,
+  })
+  console.log('[firebaseAdmin] initialized via FIREBASE_SERVICE_ACCOUNT_JSON')
 }
 
-module.exports = admin;
+// Verify storage bucket exists and is accessible.
+// Accept values like "my-bucket" or "gs://my-bucket/path/to/prefix".
+const rawBucket = process.env.FIREBASE_STORAGE_BUCKET
+if (!rawBucket) {
+  console.error('[firebaseAdmin] FIREBASE_STORAGE_BUCKET is not set')
+  throw new Error('FIREBASE_STORAGE_BUCKET is not set')
+}
+
+// Normalize: strip gs:// and extract bucket name and optional prefix path
+const normalized = rawBucket.replace(/^gs:\/\//i, '')
+const parts = normalized.split('/')
+const bucketName = parts.shift()
+const bucketPrefix = parts.length ? parts.join('/').replace(/^\/|\/$/g, '') : ''
+
+const bucket = admin.storage().bucket(bucketName)
+;(async () => {
+  try {
+    const [exists] = await bucket.exists()
+    if (!exists) {
+      // Only attempt to auto-create if explicitly requested to avoid permission/domain checks.
+      if (String(process.env.FIREBASE_AUTO_CREATE_BUCKET).toLowerCase() === 'true') {
+        console.warn(`[firebaseAdmin] Storage bucket does not exist: ${bucketName} — attempting to create`)
+        try {
+          await admin.storage().bucket(bucketName).create({
+            location: process.env.GCS_BUCKET_LOCATION || 'US',
+            storageClass: process.env.GCS_BUCKET_STORAGE_CLASS || 'STANDARD',
+          })
+          console.log(`[firebaseAdmin] Successfully created storage bucket: ${bucketName}`)
+        } catch (createErr) {
+          console.error('[firebaseAdmin] Failed to create storage bucket:', createErr && createErr.message ? createErr.message : createErr)
+          throw createErr
+        }
+      } else {
+        console.error(`[firebaseAdmin] Storage bucket does not exist: ${bucketName}. To auto-create set FIREBASE_AUTO_CREATE_BUCKET=true or create the bucket manually.`)
+        throw new Error(`Storage bucket does not exist: ${bucketName}`)
+      }
+    } else {
+      console.log(`[firebaseAdmin] Storage bucket verified: ${bucketName}`)
+    }
+  } catch (e) {
+    console.error('[firebaseAdmin] Error checking storage bucket:', e && e.message ? e.message : e)
+    // Re-throw to fail fast in startup
+    throw e
+  }
+})()
+
+// Export admin and helpers for convenience
+const db = admin.firestore()
+module.exports = admin
+module.exports.db = db
+module.exports.bucket = bucket
