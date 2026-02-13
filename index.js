@@ -13,50 +13,34 @@ console.log('DEPLOY_MARKER:', DEPLOY_MARKER)
 
 const app = express()
 
-// CORS: configured early so middleware runs before any routes.
-// Allowlist only the production frontend origins; do NOT throw from the
-// origin callback so preflight never triggers a server error.
-const allowedOrigins = [
+// Global CORS middleware (safe, allowlist). Runs before routes.
+const allowedOrigins = new Set([
   'https://www.autoeditor.app',
   'https://autoeditor.app',
-]
+])
 
-const corsOptions = {
-  origin: function (origin, callback) {
-    console.log('[cors] origin ->', origin)
-    if (!origin) return callback(null, true)
-    if (allowedOrigins.indexOf(origin) !== -1) return callback(null, origin)
-    return callback(null, false)
-  },
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true,
-  optionsSuccessStatus: 200,
-  maxAge: 600,
-}
-
-// Global CORS middleware (custom, safe, allowlist).
-// This runs before any routes and does NOT throw on disallowed origins.
 app.use((req, res, next) => {
   const origin = req.headers.origin
+
   if (process.env.NODE_ENV !== 'production') {
     console.log('[cors-mw] origin=', origin, 'method=', req.method)
   }
 
-  const allowed = origin && (origin === 'https://www.autoeditor.app' || origin === 'https://autoeditor.app' || origin === 'http://localhost:3001' || origin === 'http://localhost:3000')
-
-  if (allowed) {
+  if (origin && allowedOrigins.has(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin)
     res.setHeader('Vary', 'Origin')
-    res.setHeader('Access-Control-Allow-Credentials', 'true')
     res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS')
-    const reqHeaders = req.headers['access-control-request-headers']
-    res.setHeader('Access-Control-Allow-Headers', reqHeaders ? reqHeaders : 'Content-Type, Authorization')
+    res.setHeader(
+      'Access-Control-Allow-Headers',
+      req.headers['access-control-request-headers'] || 'Content-Type, Authorization'
+    )
+    res.setHeader('Access-Control-Max-Age', '86400')
+    // Only add this if you truly need cookies:
+    // res.setHeader('Access-Control-Allow-Credentials', 'true')
   }
 
   if (req.method === 'OPTIONS') {
-    // For preflight, always return 204. If origin not allowed, do not include ACAO header.
-    return res.status(204).end()
+    return res.sendStatus(204)
   }
 
   return next()
