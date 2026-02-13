@@ -228,14 +228,8 @@ app.get('/', (_req, res) => res.json({ message: 'autoed-backend-ready' }))
 // Minimal fallbacks so endpoints respond even if route modules aren't mounted in the image
 app.get('/api/ping', (_req, res) => res.json({ pong: true }))
 app.get('/api/userdoc', (_req, res) => res.json({ ok: true }))
-
-// Top-level POST fallback for /api/upload-url to guard against missing mounted router
-app.post('/api/upload-url', (req, res) => {
-  const { filename, contentType, mime } = req.body || {}
-  const ct = contentType || mime || null
-  if (!filename || !ct) return res.status(400).json({ ok: false, error: 'Missing filename or contentType' })
-  return res.json({ ok: true, uploadUrl: null, message: 'stub - implement signed url next' })
-})
+// Minimal fallbacks so endpoints respond even if route modules aren't mounted in the image
+// (More specific POST /api/upload-url fallback moved below so mounted router is used first.)
 
 // Mount existing route folders under /api when possible (non-fatal if module isn't an Express router)
 // Mount explicit routers under /api
@@ -250,6 +244,15 @@ app.use('/api/upload-url', require('./routes/upload-url'))
 // If a router was mounted above it will handle requests; this is a safe fallback.
 app.get('/api/jobs', (req, res) => {
   res.status(200).json({ ok: true, jobs: [] })
+})
+
+// Top-level POST fallback for /api/upload-url to guard against missing mounted router
+// This runs after mounts, so if the mounted router exists it will handle the POST.
+app.post('/api/upload-url', (req, res) => {
+  const { filename, contentType, mime } = req.body || {}
+  const ct = contentType || mime || null
+  if (!filename || !ct) return res.status(400).json({ ok: false, error: 'Missing filename or contentType' })
+  return res.json({ ok: true, uploadUrl: null, message: 'stub - implement signed url next' })
 })
 
 // Return JSON for missing API routes instead of HTML
