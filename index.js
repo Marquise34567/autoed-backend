@@ -5,26 +5,50 @@ if (process.env.NODE_ENV !== 'production') {
 const express = require('express')
 const cors = require('cors')
 
+// Boot log for entry file identification
+console.log('✅ Booting backend entry:', __filename)
+
 const app = express()
-// Allow only the frontend origin when provided, otherwise allow all for local dev
-const frontendUrl = process.env.FRONTEND_URL || ''
-app.use(cors(frontendUrl ? { origin: frontendUrl } : {}))
+
+// Lightweight health endpoints
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'ok' })
+})
+
+app.get('/api/health', (req, res) => {
+  res.status(200).json({ status: 'ok' })
+})
+// CORS: allow configured frontend and localhost:3000, allow credentials for cookies
+const FRONTEND_URL = process.env.FRONTEND_URL || null
+const allowedOrigins = [FRONTEND_URL, 'http://localhost:3000'].filter(Boolean)
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true)
+    if (allowedOrigins.indexOf(origin) !== -1) return callback(null, true)
+    return callback(new Error('Not allowed by CORS'))
+  },
+  credentials: true,
+}))
 
 // Stripe + Firebase for webhook
-const Stripe = require('stripe')
-const stripeKey = process.env.STRIPE_SECRET_KEY
-let stripe = null
-if (stripeKey) {
+const Stripe = require("stripe");
+
+const stripeKey = process.env.STRIPE_SECRET_KEY;
+
+let stripe = null;
+
+if (stripeKey && stripeKey.startsWith("sk_")) {
   try {
-    stripe = new Stripe(stripeKey, { apiVersion: '2024-06-20' })
-    console.log('✅ Stripe initialized')
+    stripe = new Stripe(stripeKey, { apiVersion: "2024-06-20" });
+    console.log("Stripe initialized");
   } catch (e) {
-    console.warn('⚠️ Failed to initialize Stripe:', e)
-    stripe = null
+    console.warn("⚠️ Failed to initialize Stripe:", e);
+    stripe = null;
   }
 } else {
-  console.warn('⚠️ STRIPE_SECRET_KEY missing — billing disabled.')
+  console.warn("⚠️ STRIPE_SECRET_KEY missing/invalid — billing disabled.");
 }
+
 const admin = require('./utils/firebaseAdmin')
 
 // IMPORTANT: Do not register global `express.json()` before the webhook route
@@ -172,13 +196,22 @@ app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res)
 // Now register body parser for all other routes
 app.use(express.json({ limit: '10mb' }))
 
-app.get('/health', (_req, res) => res.json({ status: 'ok' }))
+// Standard health + root endpoints under /api
+app.get('/api/health', (_req, res) => res.json({ status: 'ok' }))
 app.get('/', (_req, res) => res.json({ message: 'autoed-backend-ready' }))
 
-// Temporary test endpoint for jobs (helps diagnose Cannot POST /jobs)
-app.post('/jobs', async (req, res) => {
-  console.log('[jobs] POST /jobs received', { body: req.body })
-  return res.json({ success: true })
+// Mount existing route folders under /api when possible (non-fatal if module isn't an Express router)
+// Mount explicit routers under /api
+app.use('/api/health', require('./routes/health'))
+app.use('/api/ping', require('./routes/ping'))
+app.use('/api/jobs', require('./routes/jobs'))
+app.use('/api/job-status', require('./routes/job-status'))
+app.use('/api/userdoc', require('./routes/userdoc'))
+
+// Ensure a minimal /api/jobs GET exists so frontends don't get 404.
+// If a router was mounted above it will handle requests; this is a safe fallback.
+app.get('/api/jobs', (req, res) => {
+  res.status(200).json({ ok: true, jobs: [] })
 })
 
 // Log all registered routes to help debugging and deployments
@@ -205,9 +238,12 @@ function logRegisteredRoutes() {
   }
 }
 
+// Log route readiness for quick verification
+console.log('✅ Routes ready: /api/health, /api/jobs')
+
 // Bind to the PORT environment variable (Railway sets this) or fallback for local dev
-const port = process.env.PORT || 5000
-app.listen(port, () => {
-  console.log('Server running on port', port)
+const PORT = process.env.PORT || 8080
+app.listen(PORT, '0.0.0.0', () => {
+  console.log('✅ Listening on', PORT)
   logRegisteredRoutes()
 })
