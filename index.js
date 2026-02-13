@@ -245,6 +245,23 @@ const corsOptions = {
 app.options('*', cors(corsOptions))
 app.use(cors(corsOptions))
 
+// Intercept CORS errors emitted by the `cors` middleware and return a
+// stable, non-500 response. When a browser preflight is blocked we return
+// 200 for OPTIONS (so clients receive a normal preflight response without
+// a confusing server error) and 403 for other API requests.
+// This keeps the `cors` package in use while avoiding 500s when origins are
+// not allowed.
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next) => {
+  if (err && err.message && err.message.indexOf('Not allowed by CORS') !== -1) {
+    console.warn('[cors] origin blocked:', req.headers.origin)
+    if (req.method === 'OPTIONS') return res.status(200).end()
+    if (req.path && req.path.startsWith('/api/')) return res.status(403).json({ ok: false, error: 'CORS_NOT_ALLOWED' })
+    return res.status(403).send('CORS blocked')
+  }
+  return next(err)
+})
+
 // JSON parse error handler: return JSON for malformed JSON bodies
 // Place directly after the json parser so body-parser errors are handled
 // eslint-disable-next-line no-unused-vars
