@@ -12,26 +12,12 @@ const app = express()
 // CORS middleware (applied globally before any routes)
 const cors = require("cors");
 
-const allowedOrigins = [
-  "https://www.autoeditor.app",
-  "https://autoeditor.app",
-  "http://localhost:3000",
-];
+app.use(cors({
+  origin: true,
+  credentials: true
+}));
 
-const corsOptions = {
-  origin: (origin, callback) => {
-    if (!origin) return callback(null, true);
-    if (allowedOrigins.includes(origin)) return callback(null, true);
-    return callback(null, false);
-  },
-  credentials: true,
-  methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
-  optionsSuccessStatus: 204,
-};
-
-app.use(cors(corsOptions));
-app.options("*", cors(corsOptions));
+app.options("*", cors());
 
 // Lightweight health endpoints
 app.get('/health', (req, res) => {
@@ -62,6 +48,17 @@ if (stripeKey && stripeKey.startsWith("sk_")) {
 }
 
 const admin = require('./utils/firebaseAdmin')
+
+// Temporary debug endpoint to verify Firebase initialization
+app.get('/api/firebase-check', (req, res) => {
+  try {
+    const apps = Array.isArray(admin.apps) ? admin.apps.length : 0
+    if (apps && apps > 0) return res.json({ ok: true, apps })
+    return res.json({ ok: false, error: 'Firebase not initialized' })
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: e && e.message ? e.message : String(e) })
+  }
+})
 
 // IMPORTANT: Do not register global `express.json()` before the webhook route
 // The webhook requires the raw request body for signature verification.

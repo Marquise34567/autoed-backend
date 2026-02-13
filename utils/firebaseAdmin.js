@@ -1,17 +1,18 @@
 const admin = require("firebase-admin");
 
 function parseServiceAccountEnv() {
-  const env = process.env.FIREBASE_SERVICE_ACCOUNT_JSON || process.env.FIREBASE_SERVICE_ACCOUNT
-  if (!env) return null
+  const rawEnv = process.env.FIREBASE_SERVICE_ACCOUNT_JSON || process.env.FIREBASE_SERVICE_ACCOUNT
+  if (!rawEnv) return null
   try {
-    let raw = String(env).trim()
+    let raw = String(rawEnv).trim()
+    // strip surrounding quotes if present
     if ((raw.startsWith("'") && raw.endsWith("'")) || (raw.startsWith('"') && raw.endsWith('"'))) raw = raw.slice(1, -1)
     const sa = JSON.parse(raw)
     if (!sa) return null
     if (sa.private_key) sa.private_key = String(sa.private_key).replace(/\\n/g, '\n')
     return sa
-  } catch (e) {
-    console.error('[firebaseAdmin] Failed to parse FIREBASE_SERVICE_ACCOUNT_JSON:', e && e.message ? e.message : e)
+  } catch (err) {
+    console.error('[firebaseAdmin] Failed to parse FIREBASE_SERVICE_ACCOUNT_JSON', err && err.message ? err.message : err)
     return null
   }
 }
@@ -28,9 +29,9 @@ if (!admin.apps.length) {
           privateKey: sa.private_key,
         }),
       })
-      console.log('[firebaseAdmin] initialized from FIREBASE_SERVICE_ACCOUNT_JSON')
+      console.log('[firebaseAdmin] initialized via FIREBASE_SERVICE_ACCOUNT_JSON')
     } catch (e) {
-      console.error('[firebaseAdmin] Failed to initialize from FIREBASE_SERVICE_ACCOUNT_JSON:', e && e.message ? e.message : e)
+      console.error('[firebaseAdmin] Failed to initialize from FIREBASE_SERVICE_ACCOUNT_JSON', e && e.message ? e.message : e)
     }
   } else {
     // 2) Fallback to individual env vars
@@ -45,9 +46,9 @@ if (!admin.apps.length) {
         admin.initializeApp({
           credential: admin.credential.cert({ projectId, clientEmail, privateKey }),
         })
-        console.log('[firebaseAdmin] initialized from FIREBASE_PROJECT_ID/FIREBASE_CLIENT_EMAIL/FIREBASE_PRIVATE_KEY')
+        console.log('[firebaseAdmin] initialized via FIREBASE_PROJECT_ID/FIREBASE_CLIENT_EMAIL/FIREBASE_PRIVATE_KEY')
       } catch (e) {
-        console.error('[firebaseAdmin] Failed to initialize Firebase admin from env vars:', e && e.message ? e.message : e)
+        console.error('[firebaseAdmin] Failed to initialize Firebase admin from env vars', e && e.message ? e.message : e)
       }
     }
   }
