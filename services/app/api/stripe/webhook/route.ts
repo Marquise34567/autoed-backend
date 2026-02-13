@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
-import Stripe from 'stripe'
 import admin from '@/lib/firebaseAdmin'
+import { stripe } from '@/lib/stripe/server'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '', { apiVersion: '2024-06-20' })
+// stripe may be null if STRIPE_SECRET_KEY is not configured
 
 /**
  * Stripe webhook handler — verifies signature and updates Firestore users doc.
@@ -20,8 +20,12 @@ export async function POST(req: NextRequest) {
 		return NextResponse.json({ error: 'Webhook secret not configured' }, { status: 500 })
 	}
 
-	let event: Stripe.Event
+	let event: any
 	try {
+		if (!stripe) {
+			console.error('[webhook] Stripe not configured')
+			return NextResponse.json({ ok: false, error: 'Billing not configured' }, { status: 503 })
+		}
 		event = stripe.webhooks.constructEvent(Buffer.from(buf), signature, webhookSecret)
 	} catch (err) {
 		console.error('[webhook] Invalid signature', err)

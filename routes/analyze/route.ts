@@ -3,17 +3,17 @@ import path from "path";
 import { promises as fs } from "fs";
 import * as fsSync from "fs";
 import { randomUUID } from "crypto";
-import { getVideoMetadata } from "@/lib/server/ffprobe";
-import { transcribeWithWhisper } from "@/lib/analyze/transcribe";
-import { detectSilenceIntervals } from "@/lib/analyze/silence";
-import { generateCandidateSegments } from "@/lib/analyze/candidates";
-import { scoreCandidates } from "@/lib/analyze/scoring";
-import { buildEDL, validateEDL } from "@/lib/edl/builder";
-import { createJob, updateJob, appendJobLog } from "@/lib/server/jobStore";
-import { checkBinaries } from "@/lib/ffmpeg/resolve";
-import { runBin } from "@/lib/runBin";
-import { getBucket } from "@/lib/firebaseAdmin";
-import { requireAuth } from '@/lib/authServer'
+import { getVideoMetadata } from "../../services/server/ffprobe";
+import { transcribeWithWhisper } from "../../services/analyze/transcribe";
+import { detectSilenceIntervals } from "../../services/analyze/silence";
+import { generateCandidateSegments } from "../../services/analyze/candidates";
+import { scoreCandidates } from "../../services/analyze/scoring";
+import { buildEDL, validateEDL } from "../../services/edl/builder";
+import { createJob, updateJob, appendJobLog } from "../../services/jobs";
+import { checkBinaries } from "../../services/lib/ffmpeg/resolve";
+import { runBin } from "../../services/runBin";
+import { getBucket } from "../../services/firebaseAdmin";
+import { requireAuth } from '../../services/authServer'
 
 export const runtime = "nodejs";
 
@@ -284,142 +284,92 @@ export async function POST(request: Request) {
     }
 
     console.log("[analyze] All pre-flight checks passed, creating job...");
-    const job = createJob({
+
+    // Persist a lightweight job doc immediately so frontend can poll
+    await createJob({
       id: jobId,
+      uid: undefined,
+      phase: 'QUEUED',
+      status: 'queued',
+      step: 'upload',
+      progress: 0,
+      message: 'Job queued',
       filePath: inputPath,
       createdAt: Date.now(),
-      duration: 0,
-      transcript: [],
-      candidates: [],
-      clips: [],
-      status: "QUEUED",
-      stage: "Queued",
-      message: "Upload complete",
       logs: [`Uploaded ${originalFileName || path.basename(inputPath)}`],
-    });
+    } as any);
 
-    updateJob(jobId, {
-      status: "ANALYZING",
-      stage: "Analyzing",
-      message: "Transcribing and scoring",
-    });
-    
-    console.log("Getting video metadata...");
-    const metadata = await getVideoMetadata(inputPath);
-    console.log("Duration:", metadata.duration);
-    
-    updateJob(jobId, { duration: metadata.duration });
-    
-    console.log("Starting transcription...");
-    const transcript = await transcribeWithWhisper(inputPath, transcriptDir);
-    console.log("Transcription complete, segments:", transcript.length);
-    
-    console.log("Detecting silence intervals...");
-    const silenceIntervals = await detectSilenceIntervals(inputPath);
-    
-    const candidates = generateCandidateSegments(
-      metadata.duration,
-      clipLengths,
-      transcript
-    );
-    const scored = scoreCandidates(candidates, transcript, silenceIntervals).map(
-      (candidate) => ({
-        ...candidate,
-      })
-    );
+    appendJobLog(jobId, `Job created and queued`);
 
-    console.log("Building EDL (Edit Decision List)...");
-    const edl = buildEDL({
-      duration: metadata.duration,
-      transcript,
-      silenceIntervals,
-      aggressiveness: "high",
-    });
+    // Start async background processing - do NOT await
+    (async () => {
+      try {
+        await updateJob(jobId, { phase: 'ANALYZING', status: 'running', step: 'analyze', progress: 0.02, message: 'Starting analysis' } as any);
+        appendJobLog(jobId, 'Starting analysis pipeline');
 
-    console.log(`EDL: Hook ${edl.hook.start.toFixed(2)}s-${edl.hook.end.toFixed(2)}s, ${edl.segments.length} segments`);
-    console.log(`Expected output duration: ${edl.expectedChange.finalDurationSec.toFixed(2)}s (removed ${edl.expectedChange.totalRemovedSec.toFixed(2)}s)`);
+        console.log(`[analyze:${requestId}] Getting video metadata for ${inputPath}`);
+        const metadata = await getVideoMetadata(inputPath);
+        await updateJob(jobId, { duration: metadata.duration, progress: 0.05 } as any);
 
-    const validation = validateEDL(edl);
-    if (!validation.valid) {
-      console.warn("[WARNING] EDL validation issues:", validation.errors);
-      // Don't fail, but log warnings
-      validation.errors.forEach((err) => appendJobLog(jobId, `Warning: ${err}`));
-    }
+        appendJobLog(jobId, `Probed duration: ${metadata.duration}s`);
 
-    const improvements: string[] = [
-      `Hook from ${edl.hook.start.toFixed(1)}s`,
-      `Removed ${edl.expectedChange.totalRemovedSec.toFixed(1)}s`,
-      `${edl.segments.length} high-value segments kept`,
-    ];
-    const hookStart = edl.hook.start;
-    const hookEnd = edl.hook.end;
-    const chosenStart = hookStart;
-    const chosenEnd = hookEnd;
+        // transcription
+        appendJobLog(jobId, 'Starting transcription');
+        let transcript = [] as any[];
+        try {
+          transcript = await transcribeWithWhisper(inputPath, transcriptDir);
+          appendJobLog(jobId, `Transcription complete: ${transcript.length} segments`);
+          await updateJob(jobId, { progress: 0.25 } as any);
+        } catch (tErr: any) {
+          appendJobLog(jobId, `Transcription failed: ${tErr?.message || String(tErr)}`);
+          await updateJob(jobId, { status: 'error', step: 'analyze', progress: 0, error: tErr?.message || String(tErr) } as any);
+          return;
+        }
 
-    const outputDir = path.join(process.cwd(), "public", "outputs", jobId);
-    await fs.mkdir(outputDir, { recursive: true });
-    
-    // Save EDL JSON
-    const edlPath = path.join(outputDir, "edl.json");
-    await fs.writeFile(edlPath, JSON.stringify(edl, null, 2));
-    console.log("EDL saved to:", edlPath);
-    
-    // Save analysis summary
-    const analysisPath = path.join(outputDir, "analysis.json");
-    await fs.writeFile(
-      analysisPath,
-      JSON.stringify(
-        {
-          chosenStart,
-          chosenEnd,
-          hookStart,
-          hookEnd,
-          improvements,
-          edl,
-        },
-        null,
-        2
-      )
-    );
+        appendJobLog(jobId, 'Detecting silence intervals');
+        const silenceIntervals = await detectSilenceIntervals(inputPath);
+        await updateJob(jobId, { progress: 0.35 } as any);
 
-    updateJob(jobId, {
-      transcript,
-      candidates: scored,
-      status: "ENHANCING_AUDIO",
-      stage: "Enhancing audio",
-      message: "Preparing sound enhancements",
-      details: {
-        chosenStart,
-        chosenEnd,
-        hookStart,
-        improvements,
-        edl,
-      },
-    });
-    appendJobLog(jobId, `Analyzed ${originalFileName || path.basename(inputPath)}`);
-    appendJobLog(jobId, `Duration ${metadata.duration.toFixed(2)}s`);
+        const candidates = generateCandidateSegments(metadata.duration, clipLengths, transcript);
+        const scored = scoreCandidates(candidates, transcript, silenceIntervals).map((c) => ({ ...c }));
 
-    updateJob(jobId, {
-      status: "RENDERING_DRAFT",
-      stage: "Draft render",
-      message: "Building preview",
-    });
+        appendJobLog(jobId, 'Building EDL');
+        const edl = buildEDL({ duration: metadata.duration, transcript, silenceIntervals, aggressiveness: 'high' });
+        const validation = validateEDL(edl);
+        if (!validation.valid) validation.errors.forEach((err) => appendJobLog(jobId, `Warning: ${err}`));
 
-    console.log("=== Analyze complete, READY FOR GENERATE ===");
-    console.log("Job analysis done. Waiting for generate phase.");
-    
-    updateJob(jobId, {
-      status: "ENHANCING_AUDIO",
-      stage: "Audio enhancement",
-      message: "Preparing for final render",
-    });
+        const outputDir = path.join(process.cwd(), 'public', 'outputs', jobId);
+        await fs.mkdir(outputDir, { recursive: true });
+        const edlPath = path.join(outputDir, 'edl.json');
+        await fs.writeFile(edlPath, JSON.stringify(edl, null, 2));
+        const analysisPath = path.join(outputDir, 'analysis.json');
+        await fs.writeFile(analysisPath, JSON.stringify({ edl, metadata }, null, 2));
 
-    return NextResponse.json({
-      jobId: job.id,
-      duration: metadata.duration,
-      transcript,
-      candidates: scored,
-    });
+        await updateJob(jobId, { transcript, candidates: scored, status: 'done', step: 'analyze', progress: 0.9, message: 'Analysis complete', resultUrls: { edl: `/outputs/${jobId}/edl.json`, analysis: `/outputs/${jobId}/analysis.json` } } as any);
+        appendJobLog(jobId, 'Analysis complete');
+
+        // leave job in completion state; subsequent generate step can transition
+      } catch (bgErr: any) {
+        console.error(`[analyze:${requestId}] Background analysis error:`, bgErr);
+        appendJobLog(jobId, `Background error: ${bgErr?.message || String(bgErr)}`);
+        try {
+          await updateJob(jobId, { status: 'error', step: 'analyze', progress: 0, error: bgErr?.message || String(bgErr) } as any);
+        } catch (uErr) {
+          console.error('[analyze] Failed to update job on error:', uErr);
+        }
+      } finally {
+        // best-effort cleanup of temporary files
+        try {
+          if (fsSync.existsSync(inputPath)) {
+            await fs.unlink(inputPath).catch(() => {});
+            appendJobLog(jobId, `Cleaned temp input: ${inputPath}`);
+          }
+        } catch (_) {}
+      }
+    })();
+
+    // Return immediately so frontend is never blocked
+    return NextResponse.json({ ok: true, jobId }, { status: 200 });
   } catch (error) {
     console.error("=== ANALYZE ROUTE ERROR ===");
     console.error("Error type:", error?.constructor?.name);

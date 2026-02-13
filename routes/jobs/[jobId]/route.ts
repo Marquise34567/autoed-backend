@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getJob } from "@/lib/jobs";
+import { getJob } from "../../../../services/jobs";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -19,8 +19,22 @@ export async function GET(
   const job = await getJob(jobId);
 
   if (!job) {
-    return NextResponse.json({ error: "Job not found" }, { status: 404 });
+    return NextResponse.json({ ok: false, error: "Job not found" }, { status: 404 });
   }
 
-  return NextResponse.json(job, { status: 200 });
+  // Normalize output to client-friendly shape
+  const normalized = {
+    ok: true,
+    status: (job as any).status || (job as any).phase || 'unknown',
+    step: (job as any).step || (job as any).stage || (job as any).phase || 'unknown',
+    progress: typeof (job as any).progress === 'number' ? (job as any).progress : ((job as any).overallProgress ?? null),
+    eta: (job as any).etaSec ?? (job as any).overallEtaSec ?? null,
+    errorMessage: (job as any).error || null,
+    createdAt: (job as any).createdAt || null,
+    updatedAt: (job as any).updatedAt || null,
+    resultUrls: (job as any).resultUrls || (job as any).finalVideoPath ? { final: (job as any).finalVideoPath } : null,
+    logs: (job as any).logs || [],
+  };
+
+  return NextResponse.json(normalized, { status: 200 });
 }

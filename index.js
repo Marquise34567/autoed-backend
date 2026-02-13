@@ -12,7 +12,19 @@ app.use(cors(frontendUrl ? { origin: frontendUrl } : {}))
 
 // Stripe + Firebase for webhook
 const Stripe = require('stripe')
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '')
+const stripeKey = process.env.STRIPE_SECRET_KEY
+let stripe = null
+if (stripeKey) {
+  try {
+    stripe = new Stripe(stripeKey, { apiVersion: '2024-06-20' })
+    console.log('✅ Stripe initialized')
+  } catch (e) {
+    console.warn('⚠️ Failed to initialize Stripe:', e)
+    stripe = null
+  }
+} else {
+  console.warn('⚠️ STRIPE_SECRET_KEY missing — billing disabled.')
+}
 const admin = require('./utils/firebaseAdmin')
 
 // IMPORTANT: Do not register global `express.json()` before the webhook route
@@ -27,6 +39,10 @@ app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res)
 
   let event
   try {
+    if (!stripe) {
+      console.error('[webhook] Stripe not configured')
+      return res.status(503).json({ ok: false, error: 'Billing not configured' })
+    }
     event = stripe.webhooks.constructEvent(req.body, signature, webhookSecret)
   } catch (err) {
     console.error('[webhook] Invalid signature', err)

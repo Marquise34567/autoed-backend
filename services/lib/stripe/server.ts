@@ -11,6 +11,21 @@ import Stripe from 'stripe';
 
 let stripeInstance: Stripe | null = null;
 
+// Export a runtime-initialized Stripe client (null if not configured)
+const stripeKey = process.env.STRIPE_SECRET_KEY;
+let stripe: Stripe | null = null;
+if (stripeKey) {
+  try {
+    stripe = new Stripe(stripeKey, { apiVersion: '2024-06-20' });
+    console.log('✅ Stripe initialized');
+  } catch (e) {
+    console.warn('⚠️ Failed to initialize Stripe:', e);
+    stripe = null;
+  }
+} else {
+  console.warn('⚠️ STRIPE_SECRET_KEY missing — billing disabled.');
+}
+
 /**
  * Require an environment variable at runtime
  * 
@@ -74,3 +89,5 @@ export function isStripeConfigured(): boolean {
   const apiKey = process.env.STRIPE_SECRET_KEY;
   return !!(apiKey && apiKey !== 'sk_test_missing_key' && apiKey.length >= 20);
 }
+
+export { stripe };

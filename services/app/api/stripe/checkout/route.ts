@@ -1,12 +1,11 @@
 import { NextResponse } from 'next/server'
-import Stripe from 'stripe'
 import admin from '@/lib/firebaseAdmin'
 import { STRIPE_PRICES, resolvePriceId } from '@/lib/stripePrices'
+import { stripe } from '@/lib/stripe/server'
 
 export const runtime = 'nodejs'
 
 const stripeKey = process.env.STRIPE_SECRET_KEY || ''
-const stripe = new Stripe(stripeKey || '', { apiVersion: '2024-06-20' })
 const useMockStripe = !stripeKey || !stripeKey.startsWith('sk_')
 
 function jsonError(message: string, status = 400) {
@@ -101,6 +100,7 @@ export async function POST(req: Request) {
     let customerId = userData?.stripeCustomerId as string | undefined
 
     if (!customerId) {
+      if (!stripe) return jsonError('Billing not configured', 503)
       // Create Stripe customer
       const customer = await stripe.customers.create({
         email: email || undefined,
@@ -130,6 +130,8 @@ export async function POST(req: Request) {
       console.warn('[checkout] Using mock Stripe checkout (STRIPE_SECRET_KEY missing or not an sk_ key)')
       return NextResponse.json({ url: mockUrl })
     }
+
+    if (!stripe) return jsonError('Billing not configured', 503)
 
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',

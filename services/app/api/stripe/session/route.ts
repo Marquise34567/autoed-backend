@@ -1,13 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server'
-import Stripe from 'stripe'
+import { stripe } from '@/lib/stripe/server'
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '', { apiVersion: '2022-11-15' })
+if (!stripe) {
+  // Exported route will still compile, but runtime will return 503 when called.
+}
 
 export async function GET(req: NextRequest) {
   try {
     const sessionId = req.nextUrl.searchParams.get('session_id')
     if (!sessionId) return NextResponse.json({ error: 'session_id required' }, { status: 400 })
 
+    if (!stripe) return NextResponse.json({ ok: false, error: 'Billing not configured' }, { status: 503 })
     const session = await stripe.checkout.sessions.retrieve(sessionId)
     const uid = session.metadata?.uid || null
     return NextResponse.json({ uid })
