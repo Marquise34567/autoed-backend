@@ -13,29 +13,16 @@ console.log('DEPLOY_MARKER:', new Date().toISOString())
 
 const app = express()
 
-// Global emergency CORS: explicit allow for production frontend and safe
-// echo for other HTTPS origins. This runs before routes so preflight always
-// receives a valid response.
-const _trustedOriginsTop = new Set([
-  'https://autoeditor.app',
-  'https://www.autoeditor.app',
-])
+// Global emergency CORS: reflect Origin and set permissive headers for all
+// requests. This runs before any routes/middleware to ensure browsers receive
+// valid CORS responses while we iterate on a permanent policy.
 app.use((req, res, next) => {
-  const origin = req.headers.origin
-  let allowOrigin = '*'
-  if (origin) {
-    if (_trustedOriginsTop.has(origin)) {
-      allowOrigin = origin
-    } else if (/^https:\/\//i.test(origin)) {
-      allowOrigin = origin
-    }
-  }
-  res.setHeader('Access-Control-Allow-Origin', allowOrigin)
+  const origin = req.headers.origin || '*'
+  res.setHeader('Access-Control-Allow-Origin', origin)
   res.setHeader('Vary', 'Origin')
   res.setHeader('Access-Control-Allow-Credentials', 'true')
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS')
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With,Accept')
-  console.log('[cors-top] origin=', origin, 'allow=', allowOrigin)
   if (req.method === 'OPTIONS') return res.status(204).end()
   return next()
 })
@@ -43,7 +30,6 @@ app.use((req, res, next) => {
 // Guaranteed CORS middleware: dynamically echo origin and allow credentials
 // Placed before any routes so CORS headers are always set for browser requests.
 // (CORS block moved below after body parsers)
-//
 
 // Lightweight health endpoints
 app.get('/health', (req, res) => {
