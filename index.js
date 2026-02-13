@@ -22,6 +22,30 @@ const allowedOrigins = [
 
 const localhostRegex = /^http:\/\/localhost(?::\d+)?$/i
 
+// Early preflight handler: respond to OPTIONS before other middleware.
+// This avoids any origin-callback errors and guarantees a 204 for preflight.
+app.use((req, res, next) => {
+  const origin = req.headers.origin
+
+  const isAllowed = !origin || allowedOrigins.includes(origin) || localhostRegex.test(origin)
+
+  if (origin && (allowedOrigins.includes(origin) || localhostRegex.test(origin))) {
+    res.setHeader('Access-Control-Allow-Origin', origin)
+    res.setHeader('Vary', 'Origin')
+    res.setHeader('Access-Control-Allow-Credentials', 'true')
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS')
+    res.setHeader('Access-Control-Allow-Headers', req.headers['access-control-request-headers'] || 'Content-Type, Authorization')
+    res.setHeader('Access-Control-Max-Age', '86400')
+  }
+
+  if (req.method === 'OPTIONS') {
+    // Always end preflight here with 204 to avoid upstream errors
+    return res.sendStatus(204)
+  }
+
+  next()
+})
+
 const corsOptions = {
   origin: function (origin, callback) {
     // Allow server-to-server requests with no Origin header
@@ -31,7 +55,7 @@ const corsOptions = {
       return callback(null, true)
     }
 
-    // Do not throw — deny CORS by returning false so middleware won't set CORS headers
+    // Deny CORS silently (do not throw)
     return callback(null, false)
   },
   credentials: true,
