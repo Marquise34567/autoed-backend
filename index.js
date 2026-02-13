@@ -202,6 +202,21 @@ app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res)
 app.use(express.json({ limit: '20mb' }))
 app.use(express.urlencoded({ extended: true }))
 
+// Quick-permissive OPTIONS handler: respond to preflight immediately with
+// Access-Control-Allow-* headers. This ensures browsers always get a valid
+// preflight response while we refine allowlist behavior.
+app.use((req, res, next) => {
+  if (req.method !== 'OPTIONS') return next()
+  const origin = req.headers.origin || '*'
+  res.setHeader('Access-Control-Allow-Origin', origin)
+  res.setHeader('Vary', 'Origin')
+  res.setHeader('Access-Control-Allow-Credentials', 'true')
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS')
+  const reqHeaders = req.headers['access-control-request-headers']
+  res.setHeader('Access-Control-Allow-Headers', reqHeaders || 'Content-Type, Authorization')
+  return res.sendStatus(204)
+})
+
 const allowedOrigins = new Set([
   "https://autoeditor.app",
   "https://www.autoeditor.app",
