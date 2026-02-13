@@ -4,7 +4,9 @@
   "private": true,
   "scripts": {
     "dev": "node index.js",
-    "start": "node index.js"
+    "start": "node index.js",
+    "set:gcs:cors": "node scripts/set-gcs-cors.js",
+    "test:signed-put": "node scripts/test-signed-put.js"
   },
   "main": "index.js",
   "dependencies": {
@@ -12,6 +14,7 @@
     "dotenv": "*",
     "express": "*",
     "firebase-admin": "*",
+    "@google-cloud/storage": "^6.10.0",
     "mime-types": "*",
     "stripe": "*"
   }
