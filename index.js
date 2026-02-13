@@ -208,6 +208,19 @@ app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res)
 // Now register body parser for all other routes
 app.use(express.json({ limit: '10mb' }))
 
+// JSON parse error handler: return JSON for malformed JSON bodies
+// Place directly after the json parser so body-parser errors are handled
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next) => {
+  if (err && (err instanceof SyntaxError || err.type === 'entity.parse.failed')) {
+    if (req.path && req.path.startsWith('/api/')) {
+      return res.status(400).json({ ok: false, error: 'Invalid JSON' })
+    }
+    return res.status(400).send('Invalid JSON')
+  }
+  return next(err)
+})
+
 // Standard health + root endpoints under /api
 app.get('/api/health', (_req, res) => res.json({ status: 'ok' }))
 app.get('/', (_req, res) => res.json({ message: 'autoed-backend-ready' }))
