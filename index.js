@@ -3,7 +3,6 @@ if (process.env.NODE_ENV !== 'production') {
   try { require('dotenv').config() } catch (e) {}
 }
 const express = require('express')
-const cors = require('cors')
 
 // Boot log for entry file identification
 console.log('✅ Booting backend entry:', __filename)
@@ -35,9 +34,32 @@ const corsOptions = {
   maxAge: 600,
 }
 
-// Preflight and global CORS middleware MUST be registered before routes
-app.options(/.*/, cors(corsOptions))
-app.use(cors(corsOptions))
+// Global CORS middleware (custom, safe, allowlist).
+// This runs before any routes and does NOT throw on disallowed origins.
+app.use((req, res, next) => {
+  const origin = req.headers.origin
+  if (process.env.NODE_ENV !== 'production') {
+    console.log('[cors-mw] origin=', origin, 'method=', req.method)
+  }
+
+  const allowed = origin && (origin === 'https://www.autoeditor.app' || origin === 'https://autoeditor.app' || origin === 'http://localhost:3001' || origin === 'http://localhost:3000')
+
+  if (allowed) {
+    res.setHeader('Access-Control-Allow-Origin', origin)
+    res.setHeader('Vary', 'Origin')
+    res.setHeader('Access-Control-Allow-Credentials', 'true')
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS')
+    const reqHeaders = req.headers['access-control-request-headers']
+    res.setHeader('Access-Control-Allow-Headers', reqHeaders ? reqHeaders : 'Content-Type, Authorization')
+  }
+
+  if (req.method === 'OPTIONS') {
+    // For preflight, always return 204. If origin not allowed, do not include ACAO header.
+    return res.status(204).end()
+  }
+
+  return next()
+})
 
 // CORS: use the standard `cors` middleware with a tight allowlist for the
 // production frontend origins. This is mounted globally BEFORE any routes
