@@ -223,11 +223,31 @@ app.use('/api/ping', require('./routes/ping'))
 app.use('/api/jobs', require('./routes/jobs'))
 app.use('/api/job-status', require('./routes/job-status'))
 app.use('/api/userdoc', require('./routes/userdoc'))
+app.use('/api/upload-url', require('./routes/upload-url'))
 
 // Ensure a minimal /api/jobs GET exists so frontends don't get 404.
 // If a router was mounted above it will handle requests; this is a safe fallback.
 app.get('/api/jobs', (req, res) => {
   res.status(200).json({ ok: true, jobs: [] })
+})
+
+// Return JSON for missing API routes instead of HTML
+app.use((req, res, next) => {
+  if (req.path && req.path.startsWith('/api/')) {
+    return res.status(404).json({ ok: false, error: 'Not found' })
+  }
+  return next()
+})
+
+// Generic error handler that returns JSON for API routes
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next) => {
+  console.error('[error] ', err && (err.stack || err.message || err))
+  if (req.path && req.path.startsWith('/api/')) {
+    const status = err && err.status ? err.status : 500
+    return res.status(status).json({ ok: false, error: err && err.message ? err.message : 'Server error' })
+  }
+  return next(err)
 })
 
 // Log all registered routes to help debugging and deployments
