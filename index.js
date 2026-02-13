@@ -18,16 +18,28 @@ app.get('/health', (req, res) => {
 app.get('/api/health', (req, res) => {
   res.status(200).json({ status: 'ok' })
 })
-// CORS: allow configured frontend and localhost:3000, allow credentials for cookies
+// CORS: allow configured frontend, localhost, and Vercel preview domains; support credentials
 const FRONTEND_URL = process.env.FRONTEND_URL || null
-const allowedOrigins = [FRONTEND_URL, 'http://localhost:3000'].filter(Boolean)
+const allowedLocalOrigins = ['http://localhost:3000', 'http://127.0.0.1:3000']
+const vercelOriginRegex = /^https:\/\/([A-Za-z0-9-_.]+\.)?vercel\.app$/
+
 app.use(cors({
   origin: (origin, callback) => {
+    // No origin (curl, server-to-server) is allowed
     if (!origin) return callback(null, true)
-    if (allowedOrigins.indexOf(origin) !== -1) return callback(null, true)
+
+    // Exact matches
+    if (allowedLocalOrigins.indexOf(origin) !== -1) return callback(null, true)
+    if (FRONTEND_URL && origin === FRONTEND_URL) return callback(null, true)
+
+    // Vercel preview domains like https://<proj>.vercel.app
+    if (vercelOriginRegex.test(origin)) return callback(null, true)
+
+    // Not allowed
     return callback(new Error('Not allowed by CORS'))
   },
   credentials: true,
+  optionsSuccessStatus: 204,
 }))
 
 // Stripe + Firebase for webhook
