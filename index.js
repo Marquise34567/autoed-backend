@@ -12,29 +12,7 @@ const app = express()
 
 // Guaranteed CORS middleware: dynamically echo origin and allow credentials
 // Placed before any routes so CORS headers are always set for browser requests.
-// CORS allowlist using `cors` package. Allows production, www, localhost and Vercel previews.
-const allowedOrigins = [
-  'https://autoeditor.app',
-  'https://www.autoeditor.app',
-  'http://localhost:3000'
-]
-
-const corsOptions = {
-  origin: (origin, callback) => {
-    // Allow non-browser requests (curl, server-side) when no origin is provided
-    if (!origin) return callback(null, true)
-    if (allowedOrigins.includes(origin)) return callback(null, true)
-    // Allow any preview deployment on vercel.app (e.g. https://some-branch.vercel.app)
-    if (/^https:\/\/[A-Za-z0-9-]+\.vercel\.app$/.test(origin)) return callback(null, true)
-    return callback(new Error('Not allowed by CORS'))
-  },
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
-}
-
-app.use(cors(corsOptions))
-app.options('*', cors(corsOptions))
+// (CORS block moved below after body parsers)
 
 // Lightweight health endpoints
 app.get('/health', (req, res) => {
@@ -223,6 +201,32 @@ app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res)
 // so API routes receive parsed bodies (webhook above still uses raw).
 app.use(express.json({ limit: '20mb' }))
 app.use(express.urlencoded({ extended: true }))
+
+const allowedOrigins = new Set([
+  "https://autoeditor.app",
+  "https://www.autoeditor.app",
+]);
+
+app.use(
+  cors({
+    origin: function (origin, cb) {
+      // Allow server-to-server or no-origin requests
+      if (!origin) return cb(null, true);
+
+      if (allowedOrigins.has(origin)) {
+        return cb(null, true);
+      }
+
+      return cb(new Error("CORS blocked for origin: " + origin));
+    },
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  })
+);
+
+// Correct universal preflight handler (DO NOT use "*")
+app.options(/.*/, cors());
 
 // JSON parse error handler: return JSON for malformed JSON bodies
 // Place directly after the json parser so body-parser errors are handled
