@@ -208,8 +208,10 @@ app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res)
   }
 })
 
-// Now register body parser for all other routes
-app.use(express.json({ limit: '10mb' }))
+// Ensure JSON and urlencoded parsers are registered BEFORE any route mounts
+// so API routes receive parsed bodies (webhook above still uses raw).
+app.use(express.json({ limit: '20mb' }))
+app.use(express.urlencoded({ extended: true }))
 
 // JSON parse error handler: return JSON for malformed JSON bodies
 // Place directly after the json parser so body-parser errors are handled
