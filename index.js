@@ -242,9 +242,14 @@ const corsOptions = {
 // Mount CORS for all /api routes
 // Permissive preflight: always respond with Access-Control-Allow-* for OPTIONS
 app.options(/\/api\/.*/, cors({ origin: true, credentials: true, methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'], allowedHeaders: ['Content-Type','Authorization'] }))
-// Strict CORS for non-OPTIONS requests
+// Strict CORS for non-OPTIONS requests: check origin and run cors middleware
 app.use('/api', (req, res, next) => {
   if (req.method === 'OPTIONS') return next()
+  const origin = req.headers.origin
+  if (origin && !allowedOrigins.has(origin)) {
+    console.warn('[cors] blocking non-OPTIONS request from origin:', origin)
+    return res.status(403).json({ ok: false, error: 'CORS origin not allowed', origin })
+  }
   return cors(corsOptions)(req, res, next)
 })
 
