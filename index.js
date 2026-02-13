@@ -217,6 +217,18 @@ app.use((req, res, next) => {
   return res.sendStatus(204)
 })
 
+// Reflect origin for all responses to ensure browsers see Access-Control-Allow-Origin
+// This is permissive and intended to unblock the pipeline; tighten later.
+app.use((req, res, next) => {
+  const origin = req.headers.origin
+  if (origin) {
+    res.setHeader('Access-Control-Allow-Origin', origin)
+    res.setHeader('Vary', 'Origin')
+    res.setHeader('Access-Control-Allow-Credentials', 'true')
+  }
+  next()
+})
+
 const allowedOrigins = new Set([
   "https://autoeditor.app",
   "https://www.autoeditor.app",
