@@ -249,10 +249,42 @@ app.get('/api/jobs', (req, res) => {
 // Top-level POST fallback for /api/upload-url to guard against missing mounted router
 // This runs after mounts, so if the mounted router exists it will handle the POST.
 app.post('/api/upload-url', (req, res) => {
-  const { filename, contentType, mime } = req.body || {}
-  const ct = contentType || mime || null
-  if (!filename || !ct) return res.status(400).json({ ok: false, error: 'Missing filename or contentType' })
-  return res.json({ ok: true, uploadUrl: null, message: 'stub - implement signed url next' })
+  ;(async () => {
+    try {
+      const { filename, contentType, mime } = req.body || {}
+      const ct = contentType || mime || null
+      if (!filename || !ct) return res.status(400).json({ ok: false, error: 'Missing filename or contentType' })
+
+      let adminFallback = null
+      try {
+        adminFallback = require('./utils/firebaseAdmin')
+      } catch (e) {
+        adminFallback = null
+      }
+
+      if (!adminFallback || !adminFallback.storage) {
+        return res.status(500).json({ ok: false, error: 'Firebase admin not configured' })
+      }
+
+      try {
+        const bucketName = process.env.FIREBASE_STORAGE_BUCKET || undefined
+        const bucket = bucketName ? adminFallback.storage().bucket(bucketName) : adminFallback.storage().bucket()
+        const safeFilename = String(filename).replace(/[^a-zA-Z0-9._-]/g, '_')
+        const destPath = `uploads/${Date.now()}-${safeFilename}`
+        const file = bucket.file(destPath)
+        const expires = Date.now() + 15 * 60 * 1000
+
+        const [url] = await file.getSignedUrl({ version: 'v4', action: 'write', expires, contentType: ct })
+        return res.json({ ok: true, uploadUrl: url, path: destPath })
+      } catch (err) {
+        console.error('[upload-url fallback] firebase error:', err && err.message)
+        return res.status(500).json({ ok: false, error: err && err.message ? err.message : 'Firebase error' })
+      }
+    } catch (err) {
+      console.error('[upload-url fallback] handler error', err && (err.stack || err.message || err))
+      return res.status(500).json({ ok: false, error: err && err.message ? err.message : 'Internal server error' })
+    }
+  })()
 })
 
 // Return JSON for missing API routes instead of HTML
