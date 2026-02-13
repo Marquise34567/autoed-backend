@@ -13,38 +13,34 @@ console.log('DEPLOY_MARKER:', DEPLOY_MARKER)
 
 const app = express()
 
-// Global CORS middleware (safe, allowlist). Runs before routes.
+// Global CORS middleware (manual, exact implementation requested).
 const allowedOrigins = new Set([
-  'https://www.autoeditor.app',
-  'https://autoeditor.app',
+  "https://www.autoeditor.app",
+  "https://autoeditor.app",
 ])
 
 app.use((req, res, next) => {
-  const origin = req.headers.origin
-
-  if (process.env.NODE_ENV !== 'production') {
-    console.log('[cors-mw] origin=', origin, 'method=', req.method)
-  }
+  const origin = req.headers.origin;
 
   if (origin && allowedOrigins.has(origin)) {
-    res.setHeader('Access-Control-Allow-Origin', origin)
-    res.setHeader('Vary', 'Origin')
-    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS')
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Vary", "Origin");
+    res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
     res.setHeader(
-      'Access-Control-Allow-Headers',
-      req.headers['access-control-request-headers'] || 'Content-Type, Authorization'
-    )
-    res.setHeader('Access-Control-Max-Age', '86400')
+      "Access-Control-Allow-Headers",
+      req.headers["access-control-request-headers"] || "Content-Type, Authorization"
+    );
+    res.setHeader("Access-Control-Max-Age", "86400");
     // Only add this if you truly need cookies:
-    // res.setHeader('Access-Control-Allow-Credentials', 'true')
+    // res.setHeader("Access-Control-Allow-Credentials", "true");
   }
 
-  if (req.method === 'OPTIONS') {
-    return res.sendStatus(204)
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(204);
   }
 
-  return next()
-})
+  next();
+});
 
 // CORS: use the standard `cors` middleware with a tight allowlist for the
 // production frontend origins. This is mounted globally BEFORE any routes
