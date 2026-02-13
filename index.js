@@ -13,53 +13,28 @@ console.log('DEPLOY_MARKER:', DEPLOY_MARKER)
 
 const app = express()
 
-// Global CORS middleware (manual, exact implementation requested).
-const allowedOrigins = new Set([
-  "https://www.autoeditor.app",
-  "https://autoeditor.app",
-])
+const cors = require('cors')
 
-app.use((req, res, next) => {
-  const origin = req.headers.origin;
+const allowedOrigins = [
+  'https://www.autoeditor.app',
+  'https://autoeditor.app',
+  'http://localhost:3000',
+]
 
-  if (origin && allowedOrigins.has(origin)) {
-    res.setHeader("Access-Control-Allow-Origin", origin);
-    res.setHeader("Vary", "Origin");
-    res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
-    res.setHeader(
-      "Access-Control-Allow-Headers",
-      req.headers["access-control-request-headers"] || "Content-Type, Authorization"
-    );
-    res.setHeader("Access-Control-Max-Age", "86400");
-    // Only add this if you truly need cookies:
-    // res.setHeader("Access-Control-Allow-Credentials", "true");
-  }
+app.use(
+  cors({
+    origin: function (origin, callback) {
+      if (!origin) return callback(null, true)
+      if (allowedOrigins.includes(origin)) return callback(null, true)
+      return callback(new Error('CORS not allowed'))
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+  })
+)
 
-  if (req.method === "OPTIONS") {
-    return res.sendStatus(204);
-  }
-
-  next();
-});
-
-// Temporary permissive debug CORS handler for production diagnosis.
-// It always responds 204 to OPTIONS and echoes a lightweight debug route
-// at `/api/cors-debug`. Remove this after verifying Railway routing.
-app.use((req, res, next) => {
-  if (req.method === 'OPTIONS') {
-    res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*')
-    res.setHeader('Vary', 'Origin')
-    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS')
-    res.setHeader('Access-Control-Allow-Headers', req.headers['access-control-request-headers'] || 'Content-Type, Authorization')
-    res.setHeader('Access-Control-Max-Age', '86400')
-    return res.sendStatus(204)
-  }
-  next()
-})
-
-app.get('/api/cors-debug', (req, res) => {
-  return res.json({ ok: true, deploy: DEPLOY_MARKER, origin: req.headers.origin || null })
-})
+app.options('*', cors())
 
 // CORS: use the standard `cors` middleware with a tight allowlist for the
 // production frontend origins. This is mounted globally BEFORE any routes
