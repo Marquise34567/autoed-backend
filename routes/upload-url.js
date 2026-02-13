@@ -11,37 +11,43 @@ try {
 
 router.post('/', async (req, res) => {
   try {
-    const { filename, contentType, mime, folder, path } = req.body || {}
+    const { filename, contentType, mime } = req.body || {}
     const ct = contentType || mime || null
     if (!filename || !ct) {
       return res.status(400).json({ ok: false, error: 'Missing filename or contentType' })
     }
 
-    // If Firebase Storage is configured, try to create a signed upload URL
-    try {
-      const bucketName = process.env.FIREBASE_STORAGE_BUCKET || null
-      if (admin && admin.storage && bucketName) {
-        const bucket = admin.storage().bucket(bucketName)
-        const destPath = (folder || path) ? `${folder || path}/${filename}`.replace(/\\/g, '/') : filename
-        const file = bucket.file(destPath)
-        const expires = Date.now() + 15 * 60 * 1000 // 15 minutes
-        const [url] = await file.getSignedUrl({
-          action: 'write',
-          expires,
-          contentType: ct,
-        })
-        return res.json({ ok: true, uploadUrl: url, message: 'signed url (firebase)'} )
-      }
-    } catch (e) {
-      console.warn('[upload-url] firebase signed url failed', e && e.message)
-      // fallthrough to stub
+    if (!admin || !admin.storage) {
+      return res.status(500).json({ ok: false, error: 'Firebase admin not configured' })
     }
 
-    // Fallback stub response
-    return res.json({ ok: true, uploadUrl: null, message: 'stub - implement signed url next' })
+    try {
+      const bucketName = process.env.FIREBASE_STORAGE_BUCKET || undefined
+      const bucket = bucketName ? admin.storage().bucket(bucketName) : admin.storage().bucket()
+
+      // generate unique path
+      const safeFilename = String(filename).replace(/[^a-zA-Z0-9._-]/g, '_')
+      const destPath = `uploads/${Date.now()}-${safeFilename}`
+
+      const file = bucket.file(destPath)
+      const expires = Date.now() + 15 * 60 * 1000 // 15 minutes
+
+      const [url] = await file.getSignedUrl({
+        version: 'v4',
+        action: 'write',
+        expires,
+        contentType: ct,
+      })
+
+      return res.json({ ok: true, uploadUrl: url, path: destPath })
+    } catch (err) {
+      // Do not log private keys or sensitive envs
+      console.error('[upload-url] firebase error:', err && err.message)
+      return res.status(500).json({ ok: false, error: err && err.message ? err.message : 'Firebase error' })
+    }
   } catch (err) {
-    console.error('[upload-url] handler error', err)
-    return res.status(500).json({ ok: false, error: 'Internal server error' })
+    console.error('[upload-url] handler error', err && (err.stack || err.message || err))
+    return res.status(500).json({ ok: false, error: err && err.message ? err.message : 'Internal server error' })
   }
 })
 
