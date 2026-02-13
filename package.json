@@ -10,11 +10,11 @@
   },
   "main": "index.js",
   "dependencies": {
+    "@google-cloud/storage": "^6.10.0",
     "cors": "^2.8.5",
     "dotenv": "*",
     "express": "*",
     "firebase-admin": "*",
-    "@google-cloud/storage": "^6.10.0",
     "mime-types": "*",
     "stripe": "*"
   }

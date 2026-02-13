@@ -51,7 +51,15 @@ async function main() {
     console.log('Applying CORS configuration:')
     console.log(JSON.stringify(corsConfig, null, 2))
 
-    await bucket.setMetadata({ cors: corsConfig })
+    try {
+      await bucket.setMetadata({ cors: corsConfig })
+    } catch (e) {
+      console.error('Failed to apply CORS to bucket:', e && e.message ? e.message : e)
+      if (String(e && e.message || '').toLowerCase().includes('not found') || String(e && e.message || '').toLowerCase().includes('does not exist')) {
+        console.error('\nBucket not found or inaccessible. Verify FIREBASE_STORAGE_BUCKET and that the service account has permission.\n')
+      }
+      throw e
+    }
 
     const [meta] = await bucket.getMetadata()
     console.log('Resulting bucket.cors:')
