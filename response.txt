@@ -1,0 +1,23 @@
+HTTP/1.1 404 Not Found
+Access-Control-Allow-Credentials: true
+Content-Length: 154
+Content-Security-Policy: default-src 'none'
+Content-Type: text/html; charset=utf-8
+Date: Fri, 13 Feb 2026 06:17:47 GMT
+Server: railway-edge
+Vary: Origin
+X-Content-Type-Options: nosniff
+X-Powered-By: Express
+X-Railway-Edge: railway/us-east4-eqdc4a
+X-Railway-Request-Id: ObmAcsGJTNamoBMzAax-fw
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Error</title>
+</head>
+<body>
+<pre>Cannot POST /api/upload-url</pre>
+</body>
+</html>

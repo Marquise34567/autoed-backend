@@ -3,12 +3,35 @@ if (process.env.NODE_ENV !== 'production') {
   try { require('dotenv').config() } catch (e) {}
 }
 const express = require('express')
-const cors = require('cors')
 
 // Boot log for entry file identification
 console.log('✅ Booting backend entry:', __filename)
 
 const app = express()
+
+// CORS middleware (applied globally before any routes)
+const cors = require("cors");
+
+const allowedOrigins = [
+  "https://www.autoeditor.app",
+  "https://autoeditor.app",
+  "http://localhost:3000",
+];
+
+const corsOptions = {
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+    return callback(null, false);
+  },
+  credentials: true,
+  methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
+  optionsSuccessStatus: 204,
+};
+
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions));
 
 // Lightweight health endpoints
 app.get('/health', (req, res) => {
@@ -18,29 +41,6 @@ app.get('/health', (req, res) => {
 app.get('/api/health', (req, res) => {
   res.status(200).json({ status: 'ok' })
 })
-// CORS: allow configured frontend, localhost, and Vercel preview domains; support credentials
-const FRONTEND_URL = process.env.FRONTEND_URL || null
-const allowedLocalOrigins = ['http://localhost:3000', 'http://127.0.0.1:3000']
-const vercelOriginRegex = /^https:\/\/([A-Za-z0-9-_.]+\.)?vercel\.app$/
-
-app.use(cors({
-  origin: (origin, callback) => {
-    // No origin (curl, server-to-server) is allowed
-    if (!origin) return callback(null, true)
-
-    // Exact matches
-    if (allowedLocalOrigins.indexOf(origin) !== -1) return callback(null, true)
-    if (FRONTEND_URL && origin === FRONTEND_URL) return callback(null, true)
-
-    // Vercel preview domains like https://<proj>.vercel.app
-    if (vercelOriginRegex.test(origin)) return callback(null, true)
-
-    // Not allowed
-    return callback(new Error('Not allowed by CORS'))
-  },
-  credentials: true,
-  optionsSuccessStatus: 204,
-}))
 
 // Stripe + Firebase for webhook
 const Stripe = require("stripe");
@@ -275,7 +275,12 @@ app.post('/api/upload-url', (req, res) => {
         const expires = Date.now() + 15 * 60 * 1000
 
         const [url] = await file.getSignedUrl({ version: 'v4', action: 'write', expires, contentType: ct })
-        return res.json({ ok: true, signedUrl: url, path: destPath, bucket: bucket.name })
+        console.log('[upload-url fallback] signedUrl generated:', !!url, { path: destPath, bucket: bucket.name })
+        if (!url) {
+          console.error('[upload-url fallback] signedUrl is undefined', { path: destPath, bucket: bucket.name, contentType: ct })
+          return res.status(500).json({ ok: false, error: 'SIGNED_URL_FAILED', details: 'signedUrl undefined' })
+        }
+        return res.json({ ok: true, signedUrl: url })
       } catch (err) {
         console.error('[upload-url fallback] firebase error:', err && (err.message || err))
         return res.status(500).json({ ok: false, error: 'Failed to generate signed URL', details: err && err.message ? err.message : String(err) })

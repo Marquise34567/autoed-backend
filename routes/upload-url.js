@@ -49,11 +49,18 @@ router.post('/', async (req, res) => {
         contentType: ct,
       })
 
-      return res.json({ ok: true, signedUrl: url, path: destPath, bucket: bucket.name })
+      // Confirm signedUrl exists for frontend expectations
+      console.log('[upload-url] signedUrl generated:', !!url, { path: destPath, bucket: bucket.name })
+      if (!url) {
+        console.error('[upload-url] signedUrl is undefined', { path: destPath, bucket: bucket.name, contentType: ct })
+        return res.status(500).json({ ok: false, error: 'SIGNED_URL_FAILED', details: 'signedUrl undefined' })
+      }
+
+      return res.json({ ok: true, signedUrl: url })
     } catch (err) {
       // Log non-sensitive error info
       console.error('[upload-url] firebase error:', err && (err.message || err))
-      return res.status(500).json({ ok: false, error: 'Failed to generate signed URL', details: err && err.message ? err.message : String(err) })
+      return res.status(500).json({ ok: false, error: 'SIGNED_URL_FAILED', details: err && err.message ? err.message : String(err) })
     }
   } catch (err) {
     console.error('[upload-url] handler error', err && (err.stack || err.message || err))
@@ -61,12 +68,6 @@ router.post('/', async (req, res) => {
   }
 })
 
-// Ensure OPTIONS preflight is handled for CORS (explicitly allow headers used by client)
-router.options('/', (req, res) => {
-  res.set('Access-Control-Allow-Methods', 'POST,OPTIONS')
-  res.set('Access-Control-Allow-Headers', 'Content-Type,Authorization')
-  res.set('Access-Control-Allow-Credentials', 'true')
-  return res.sendStatus(204)
-})
+// Preflight handled globally by CORS middleware
 
 module.exports = router

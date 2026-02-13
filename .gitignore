@@ -12,3 +12,4 @@ uploads
 *adminsdk*.json
 serviceAccount*.json
 firebase-adminsdk*.json
+service-account.json
