@@ -12,12 +12,12 @@
   "main": "index.js",
   "dependencies": {
     "@google-cloud/storage": "^6.10.0",
-    "puppeteer": "^21.0.1",
-    "cors": "^2.8.5",
+    "cors": "^2.8.6",
     "dotenv": "*",
     "express": "*",
     "firebase-admin": "*",
     "mime-types": "*",
+    "puppeteer": "^21.0.1",
     "stripe": "*"
   }
 }
