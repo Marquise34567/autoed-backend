@@ -313,7 +313,7 @@ app.get('/api/userdoc', (_req, res) => res.json({ ok: true }))
 // Mount explicit routers under /api
 app.use('/api/health', require('./routes/health'))
 app.use('/api/ping', require('./routes/ping'))
-app.use('/api/jobs', require('./routes/jobs'))
+app.use("/api/jobs", require("./routes/jobs"))
 app.use('/api/job-status', require('./routes/job-status'))
 app.use('/api/userdoc', require('./routes/userdoc'))
 app.use('/api/upload-url', require('./routes/upload-url'))
@@ -322,6 +322,13 @@ try {
   app.use('/api/debug', require('./routes/debug/signed-put-test'))
 } catch (e) {
   console.warn('[debug routes] failed to mount debug routes', e && e.message ? e.message : e)
+}
+
+// Confirm mounted routes for easier production debugging
+try {
+  console.log('Mounted /api/jobs')
+} catch (e) {
+  console.warn('Failed to log mounted /api/jobs', e && e.message ? e.message : e)
 }
 
 // Ensure a minimal /api/jobs GET exists so frontends don't get 404.
@@ -379,7 +386,7 @@ app.post('/api/upload-url', (req, res) => {
 // Return JSON for missing API routes instead of HTML
 app.use((req, res, next) => {
   if (req.path && req.path.startsWith('/api/')) {
-    return res.status(404).json({ ok: false, error: 'Not found' })
+    return res.status(404).json({ ok: false, error: 'Not found', path: req.originalUrl })
   }
   return next()
 })

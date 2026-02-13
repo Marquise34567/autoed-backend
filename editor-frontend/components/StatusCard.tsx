@@ -12,7 +12,8 @@ type JobStatus = {
 export default function StatusCard(){
   const router = useRouter()
   const { jobId } = router.query as { jobId?: string }
-  const apiBase = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:8080'
+  const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_BASE || 'https://remarkable-comfort-production-4a9a.up.railway.app'
+  if (!process.env.NEXT_PUBLIC_API_BASE_URL) console.warn('NEXT_PUBLIC_API_BASE_URL not set; defaulting to', apiBase)
   const [job, setJob] = useState<JobStatus | null>(null)
 
   useEffect(() => {

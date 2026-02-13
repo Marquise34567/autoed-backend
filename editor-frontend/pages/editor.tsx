@@ -11,7 +11,11 @@ function Uploader(){
     setStatus('requesting signed url')
     try {
       const body = { filename: file.name, contentType: file.type || 'application/octet-stream' }
-      const backendBase = (process.env.NEXT_PUBLIC_BACKEND_URL) ? process.env.NEXT_PUBLIC_BACKEND_URL : 'http://localhost:8080'
+      // Prefer explicit API base env var; default to local dev or Railway production
+      const backendBase = process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8080'
+      if (!process.env.NEXT_PUBLIC_API_BASE_URL) {
+        console.warn('NEXT_PUBLIC_API_BASE_URL not set; defaulting to', backendBase)
+      }
       const resp = await fetch(`${backendBase}/api/upload-url`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
       if (!resp.ok) throw new Error(await resp.text())
       const json = await resp.json()
