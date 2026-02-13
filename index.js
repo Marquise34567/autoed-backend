@@ -224,19 +224,8 @@ const allowedOrigins = [
 ]
 
 const corsOptions = {
-  origin: function (origin, callback) {
-    console.log('[cors] origin ->', origin)
-    if (!origin) return callback(null, true)
-    try {
-      const u = new URL(origin)
-      const host = u.hostname && u.hostname.toLowerCase()
-      if (host === 'autoeditor.app' || host === 'www.autoeditor.app') return callback(null, origin)
-    } catch (e) {
-      // If origin isn't a valid URL, fall through to disallow
-    }
-    console.warn('[cors] blocked origin:', origin)
-    return callback(null, false)
-  },
+  // Use explicit array allowlist for stability in production.
+  origin: allowedOrigins,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true,
