@@ -213,61 +213,43 @@ app.use((req, res, next) => {
   next()
 })
 
-// CORS allowlist for API routes only. Must be mounted BEFORE any /api routes.
+// CORS: robust and permissive for HTTPS frontends while keeping server-to-server
+// requests allowed. This echoes the Origin for HTTPS origins and permits
+// credentials. Mount before /api routes so preflight and actual requests
+// receive consistent headers.
 const allowedOrigins = new Set([
   'https://autoeditor.app',
   'https://www.autoeditor.app',
 ])
 
+const permissiveHttpsRegex = /^https:\/\//i
+
 const corsOptions = {
   origin: function (origin, cb) {
-    // Allow server-to-server or no-origin requests
     console.log('[cors] origin check ->', origin)
-    if (!origin) {
-      console.log('[cors] origin empty — allowing (server-to-server)')
-      return cb(null, true)
-    }
-    if (allowedOrigins.has(origin)) {
-      console.log('[cors] origin allowed:', origin)
-      return cb(null, true)
-    }
-    console.log('[cors] origin NOT allowed:', origin)
-    // Do not throw an error via the callback — return `false` to indicate
-    // the origin is not allowed. Throwing an Error here causes the CORS
-    // middleware to surface a 500. We handle rejection for non-OPTIONS
-    // requests explicitly elsewhere.
+    // Allow server-to-server/no-origin requests (e.g., curl, server webhooks)
+    if (!origin) return cb(null, true)
+    // Explicit allowlist match
+    if (allowedOrigins.has(origin)) return cb(null, true)
+    // Allow any HTTPS origin (covers preview domains like vercel.app, etc.)
+    if (permissiveHttpsRegex.test(origin)) return cb(null, true)
+    // Otherwise, disallow
+    console.warn('[cors] origin NOT allowed:', origin)
     return cb(null, false)
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
+  maxAge: 600,
 }
 
-// Mount CORS for all /api routes
-// Permissive preflight: always respond with Access-Control-Allow-* for OPTIONS
-app.options(/\/api\/.*/, cors({ origin: true, credentials: true, methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'], allowedHeaders: ['Content-Type','Authorization'] }))
-// Strict CORS for non-OPTIONS requests: check origin and run cors middleware
-app.use('/api', (req, res, next) => {
-  if (req.method === 'OPTIONS') return next()
-  const origin = req.headers.origin
-  if (origin && !allowedOrigins.has(origin)) {
-    console.warn('[cors] blocking non-OPTIONS request from origin:', origin)
-    return res.status(403).json({ ok: false, error: 'CORS origin not allowed', origin })
-  }
-  return cors(corsOptions)(req, res, next)
-})
+// Respond to OPTIONS preflight for /api/* using the same cors options
+app.options(/\/api\/.*/, cors(corsOptions))
+// Apply CORS to all /api routes
+app.use('/api', cors(corsOptions))
 
-// Correct universal preflight handler: respond permissively to OPTIONS so
-// browsers receive Access-Control-Allow-* headers during preflight even if
-// the origin is not allowlisted. Actual non-OPTIONS requests still go
-// through the stricter `corsOptionsForNonOptions` handler below.
-app.options(/.*/, cors({ origin: true, credentials: true, methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"], allowedHeaders: ["Content-Type", "Authorization"] }))
-
-// Use stricter CORS check only for non-OPTIONS requests
-app.use((req, res, next) => {
-  if (req.method === 'OPTIONS') return next()
-  return cors(corsOptionsForNonOptions)(req, res, next)
-})
+// Also respond permissively to other OPTIONS to keep non-/api endpoints friendly
+app.options(/.*/, cors(corsOptions))
 
 // JSON parse error handler: return JSON for malformed JSON bodies
 // Place directly after the json parser so body-parser errors are handled
