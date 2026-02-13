@@ -9,15 +9,21 @@ console.log('✅ Booting backend entry:', __filename)
 
 const app = express()
 
-// CORS middleware (applied globally before any routes)
-const cors = require("cors");
-
-app.use(cors({
-  origin: true,
-  credentials: true
-}));
-
-app.options("*", cors());
+// Guaranteed CORS middleware: dynamically echo origin and allow credentials
+// Placed before any routes so CORS headers are always set for browser requests.
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Vary", "Origin");
+  }
+  res.setHeader("Access-Control-Allow-Credentials", "true");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
+  const reqHeaders = req.headers["access-control-request-headers"];
+  res.setHeader("Access-Control-Allow-Headers", reqHeaders || "Content-Type, Authorization, X-Requested-With");
+  if (req.method === "OPTIONS") return res.sendStatus(204);
+  next();
+});
 
 // Lightweight health endpoints
 app.get('/health', (req, res) => {
