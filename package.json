@@ -12,6 +12,7 @@
     "cors": "*",
     "dotenv": "*",
     "firebase-admin": "*",
+    "mime-types": "*",
     "stripe": "*"
   }
 }

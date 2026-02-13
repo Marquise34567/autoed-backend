@@ -1,4 +1,5 @@
 const express = require('express')
+const mimeLib = require('mime-types')
 const router = express.Router()
 
 // Try to reuse Firebase admin storage if available
@@ -12,7 +13,7 @@ try {
 router.post('/', async (req, res) => {
   try {
     const { filename, contentType, mime } = req.body || {}
-    const ct = contentType || mime || null
+    const ct = contentType || mime || mimeLib.lookup(filename) || null
     if (!filename || !ct) {
       return res.status(400).json({ ok: false, error: 'Missing filename or contentType' })
     }
