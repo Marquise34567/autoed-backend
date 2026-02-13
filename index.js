@@ -18,23 +18,39 @@ const cors = require('cors')
 const allowedOrigins = [
   'https://www.autoeditor.app',
   'https://autoeditor.app',
-  'http://localhost:3000',
 ]
 
-app.use(
-  cors({
-    origin: function (origin, callback) {
-      if (!origin) return callback(null, true)
-      if (allowedOrigins.includes(origin)) return callback(null, true)
-      return callback(new Error('CORS not allowed'))
-    },
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
-  })
-)
+const localhostRegex = /^http:\/\/localhost(?::\d+)?$/i
 
-app.options('*', cors())
+const corsOptions = {
+  origin: function (origin, callback) {
+    // Allow server-to-server requests with no Origin header
+    if (!origin) return callback(null, true)
+
+    if (allowedOrigins.includes(origin) || localhostRegex.test(origin)) {
+      return callback(null, true)
+    }
+
+    // Do not throw — deny CORS by returning false so middleware won't set CORS headers
+    return callback(null, false)
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+}
+
+app.use(cors(corsOptions))
+app.options('*', cors(corsOptions))
+
+// Log CORS origin on every request for deploy verification
+app.use((req, res, next) => {
+  try {
+    console.log('CORS Origin:', req.headers.origin || '<none>')
+  } catch (e) {
+    /* ignore logging errors */
+  }
+  next()
+})
 
 // CORS: use the standard `cors` middleware with a tight allowlist for the
 // production frontend origins. This is mounted globally BEFORE any routes
