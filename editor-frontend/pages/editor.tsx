@@ -12,7 +12,8 @@ function Uploader(){
     setStatus('requesting signed url')
     try {
       const body = { filename: file.name, contentType: file.type || 'application/octet-stream' }
-      const resp = await fetch('/api/upload-url', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      const backendBase = (process.env.NEXT_PUBLIC_BACKEND_URL) ? process.env.NEXT_PUBLIC_BACKEND_URL : 'http://localhost:8080'
+      const resp = await fetch(`${backendBase}/api/upload-url`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
       if (!resp.ok) throw new Error(await resp.text())
       const json = await resp.json()
       if (!json.signedUrl) throw new Error('No signedUrl in response')
