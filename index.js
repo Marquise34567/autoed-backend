@@ -13,23 +13,10 @@ console.log('DEPLOY_MARKER:', new Date().toISOString())
 
 const app = express()
 
-// Global emergency CORS: reflect Origin and set permissive headers for all
-// requests. This runs before any routes/middleware to ensure browsers receive
-// valid CORS responses while we iterate on a permanent policy.
-app.use((req, res, next) => {
-  const origin = req.headers.origin || '*'
-  res.setHeader('Access-Control-Allow-Origin', origin)
-  res.setHeader('Vary', 'Origin')
-  res.setHeader('Access-Control-Allow-Credentials', 'true')
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS')
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With,Accept')
-  if (req.method === 'OPTIONS') return res.status(204).end()
-  return next()
-})
-
-// Guaranteed CORS middleware: dynamically echo origin and allow credentials
-// Placed before any routes so CORS headers are always set for browser requests.
-// (CORS block moved below after body parsers)
+// CORS: use the standard `cors` middleware with a tight allowlist for the
+// production frontend origins. This is mounted globally BEFORE any routes
+// (including the webhook) so preflight and normal requests get consistent
+// headers. Server-to-server (no Origin) requests are still allowed.
 
 // Lightweight health endpoints
 app.get('/health', (req, res) => {
@@ -230,61 +217,33 @@ app.use((req, res, next) => {
   next()
 })
 
-// Emergency preflight responder: respond to OPTIONS early by echoing the
-// Origin into Access-Control-Allow-Origin and returning 204. This is a
-// short-term safety net to unblock browser preflight failures in production
-// while CORS rules are being iterated.
-app.use((req, res, next) => {
-  if (req.method !== 'OPTIONS') return next()
-  const origin = req.headers.origin || '*'
-  res.setHeader('Access-Control-Allow-Origin', origin)
-  res.setHeader('Vary', 'Origin')
-  res.setHeader('Access-Control-Allow-Credentials', 'true')
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS')
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With,Accept')
-  return res.status(204).end()
-})
-
-// CORS: robust and permissive for HTTPS frontends while keeping server-to-server
-// requests allowed. This echoes the Origin for HTTPS origins and permits
-// credentials. Mount before /api routes so preflight and actual requests
-// receive consistent headers.
-const allowedOrigins = new Set([
-  'https://autoeditor.app',
+// Configure a secure, production-ready CORS policy.
+const allowedOrigins = [
   'https://www.autoeditor.app',
-])
-
-const permissiveHttpsRegex = /^https:\/\//i
+  'https://autoeditor.app',
+]
 
 const corsOptions = {
-  origin: function (origin, cb) {
-    console.log('[cors] origin check ->', origin)
-    // Allow server-to-server/no-origin requests (e.g., curl, server webhooks)
-    if (!origin) return cb(null, true)
-    // Explicit allowlist match
-    if (allowedOrigins.has(origin)) return cb(null, true)
-    // Allow any HTTPS origin (covers preview domains like vercel.app, etc.)
-    if (permissiveHttpsRegex.test(origin)) return cb(null, true)
-    // Otherwise, disallow
-    console.warn('[cors] origin NOT allowed:', origin)
-    return cb(null, false)
+  origin: function (origin, callback) {
+    console.log('[cors] origin ->', origin)
+    // Allow server-to-server or non-browser requests with no Origin header
+    if (!origin) return callback(null, true)
+    if (allowedOrigins.indexOf(origin) !== -1) return callback(null, true)
+    // Disallow anything else
+    console.warn('[cors] blocked origin:', origin)
+    return callback(new Error('Not allowed by CORS'))
   },
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
+  optionsSuccessStatus: 200,
   maxAge: 600,
 }
 
-// Temporary emergency: reflect any Origin for /api to unblock clients quickly.
-// This mirrors the incoming Origin into Access-Control-Allow-Origin while
-// still allowing credentials. It's safe as a short-term fix; we can tighten
-// this to an allowlist once production is verified.
-const apiCors = cors({ origin: true, credentials: true, methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'], allowedHeaders: ['Content-Type','Authorization','X-Requested-With','Accept'], maxAge: 600 })
-app.options(/\/api\/.*/, apiCors)
-app.use('/api', apiCors)
-
-// Also respond permissively to other OPTIONS to keep non-/api endpoints friendly
-app.options(/.*/, cors(corsOptions))
+// Ensure preflight OPTIONS requests return a 200 using our cors options,
+// and register the global CORS middleware BEFORE any routes are mounted.
+app.options('*', cors(corsOptions))
+app.use(cors(corsOptions))
 
 // JSON parse error handler: return JSON for malformed JSON bodies
 // Place directly after the json parser so body-parser errors are handled
