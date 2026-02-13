@@ -207,9 +207,8 @@ const allowedOrigins = new Set([
   "https://www.autoeditor.app",
 ]);
 
-app.use(
-  cors({
-    origin: function (origin, cb) {
+const corsOptionsForNonOptions = {
+  origin: function (origin, cb) {
       // Allow server-to-server or no-origin requests
       if (!origin) return cb(null, true);
 
@@ -238,11 +237,19 @@ app.use(
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
-  })
-);
+}
 
-// Correct universal preflight handler (DO NOT use "*")
-app.options(/.*/, cors());
+// Correct universal preflight handler: respond permissively to OPTIONS so
+// browsers receive Access-Control-Allow-* headers during preflight even if
+// the origin is not allowlisted. Actual non-OPTIONS requests still go
+// through the stricter `corsOptionsForNonOptions` handler below.
+app.options(/.*/, cors({ origin: true, credentials: true, methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"], allowedHeaders: ["Content-Type", "Authorization"] }))
+
+// Use stricter CORS check only for non-OPTIONS requests
+app.use((req, res, next) => {
+  if (req.method === 'OPTIONS') return next()
+  return cors(corsOptionsForNonOptions)(req, res, next)
+})
 
 // JSON parse error handler: return JSON for malformed JSON bodies
 // Place directly after the json parser so body-parser errors are handled
