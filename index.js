@@ -228,39 +228,23 @@ const corsOptions = {
     console.log('[cors] origin ->', origin)
     // Allow server-to-server or non-browser requests with no Origin header
     if (!origin) return callback(null, true)
-    if (allowedOrigins.indexOf(origin) !== -1) return callback(null, true)
-    // Disallow anything else: signal CORS not allowed (no exception)
+    // Explicit allowlist: return the origin string so Access-Control-Allow-Origin is set
+    if (allowedOrigins.indexOf(origin) !== -1) return callback(null, origin)
+    // Disallow anything else: signal CORS not allowed (do NOT throw)
     console.warn('[cors] blocked origin:', origin)
     return callback(null, false)
   },
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true,
   optionsSuccessStatus: 200,
   maxAge: 600,
 }
 
-// Ensure preflight OPTIONS requests return a 200 using our cors options,
-// and register the global CORS middleware BEFORE any routes are mounted.
-app.options('*', cors(corsOptions))
+// Ensure preflight OPTIONS requests are handled using the cors options and
+// mount the global CORS middleware BEFORE any route handlers are registered.
+app.options(/.*/, cors(corsOptions))
 app.use(cors(corsOptions))
-
-// Intercept CORS errors emitted by the `cors` middleware and return a
-// stable, non-500 response. When a browser preflight is blocked we return
-// 200 for OPTIONS (so clients receive a normal preflight response without
-// a confusing server error) and 403 for other API requests.
-// This keeps the `cors` package in use while avoiding 500s when origins are
-// not allowed.
-// eslint-disable-next-line no-unused-vars
-app.use((err, req, res, next) => {
-  if (err && err.message && err.message.indexOf('Not allowed by CORS') !== -1) {
-    console.warn('[cors] origin blocked:', req.headers.origin)
-    if (req.method === 'OPTIONS') return res.status(200).end()
-    if (req.path && req.path.startsWith('/api/')) return res.status(403).json({ ok: false, error: 'CORS_NOT_ALLOWED' })
-    return res.status(403).send('CORS blocked')
-  }
-  return next(err)
-})
 
 // JSON parse error handler: return JSON for malformed JSON bodies
 // Place directly after the json parser so body-parser errors are handled
