@@ -13,6 +13,32 @@ console.log('DEPLOY_MARKER:', new Date().toISOString())
 
 const app = express()
 
+// CORS: configured early so middleware runs before any routes.
+// Allowlist only the production frontend origins; do NOT throw from the
+// origin callback so preflight never triggers a server error.
+const allowedOrigins = [
+  'https://www.autoeditor.app',
+  'https://autoeditor.app',
+]
+
+const corsOptions = {
+  origin: function (origin, callback) {
+    console.log('[cors] origin ->', origin)
+    if (!origin) return callback(null, true)
+    if (allowedOrigins.indexOf(origin) !== -1) return callback(null, origin)
+    return callback(null, false)
+  },
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true,
+  optionsSuccessStatus: 200,
+  maxAge: 600,
+}
+
+// Preflight and global CORS middleware MUST be registered before routes
+app.options(/.*/, cors(corsOptions))
+app.use(cors(corsOptions))
+
 // CORS: use the standard `cors` middleware with a tight allowlist for the
 // production frontend origins. This is mounted globally BEFORE any routes
 // (including the webhook) so preflight and normal requests get consistent
@@ -217,26 +243,7 @@ app.use((req, res, next) => {
   next()
 })
 
-// Configure a secure, production-ready CORS policy.
-const allowedOrigins = [
-  'https://www.autoeditor.app',
-  'https://autoeditor.app',
-]
-
-const corsOptions = {
-  // Use explicit array allowlist for stability in production.
-  origin: allowedOrigins,
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true,
-  optionsSuccessStatus: 200,
-  maxAge: 600,
-}
-
-// Ensure preflight OPTIONS requests are handled using the cors options and
-// mount the global CORS middleware BEFORE any route handlers are registered.
-app.options(/.*/, cors(corsOptions))
-app.use(cors(corsOptions))
+// (CORS already configured at top of file)
 
 // JSON parse error handler: return JSON for malformed JSON bodies
 // Place directly after the json parser so body-parser errors are handled
