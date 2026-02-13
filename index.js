@@ -226,11 +226,14 @@ const allowedOrigins = [
 const corsOptions = {
   origin: function (origin, callback) {
     console.log('[cors] origin ->', origin)
-    // Allow server-to-server or non-browser requests with no Origin header
     if (!origin) return callback(null, true)
-    // Explicit allowlist: return the origin string so Access-Control-Allow-Origin is set
-    if (allowedOrigins.indexOf(origin) !== -1) return callback(null, origin)
-    // Disallow anything else: signal CORS not allowed (do NOT throw)
+    try {
+      const u = new URL(origin)
+      const host = u.hostname && u.hostname.toLowerCase()
+      if (host === 'autoeditor.app' || host === 'www.autoeditor.app') return callback(null, origin)
+    } catch (e) {
+      // If origin isn't a valid URL, fall through to disallow
+    }
     console.warn('[cors] blocked origin:', origin)
     return callback(null, false)
   },
