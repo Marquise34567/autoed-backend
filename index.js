@@ -222,8 +222,16 @@ const allowedOrigins = new Set([
 const corsOptions = {
   origin: function (origin, cb) {
     // Allow server-to-server or no-origin requests
-    if (!origin) return cb(null, true)
-    if (allowedOrigins.has(origin)) return cb(null, true)
+    console.log('[cors] origin check ->', origin)
+    if (!origin) {
+      console.log('[cors] origin empty — allowing (server-to-server)')
+      return cb(null, true)
+    }
+    if (allowedOrigins.has(origin)) {
+      console.log('[cors] origin allowed:', origin)
+      return cb(null, true)
+    }
+    console.log('[cors] origin NOT allowed:', origin)
     return cb(new Error('Not allowed by CORS'))
   },
   credentials: true,
