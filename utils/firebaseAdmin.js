@@ -23,7 +23,7 @@ function getCredential() {
   const clientEmail = process.env.FIREBASE_CLIENT_EMAIL
   const privateKeyRaw = process.env.FIREBASE_PRIVATE_KEY
   if (!projectId || !clientEmail || !privateKeyRaw) {
-    throw new Error('Missing Firebase service account environment variables')
+    return null
   }
   const privateKey = String(privateKeyRaw).replace(/\\n/g, '\n')
   return admin.credential.cert({ projectId, clientEmail, privateKey })
@@ -31,7 +31,11 @@ function getCredential() {
 
 if (!admin.apps.length) {
   const credential = getCredential()
-  admin.initializeApp({ credential })
+  if (credential) {
+    admin.initializeApp({ credential })
+  } else {
+    console.warn('Missing Firebase service account environment variables — Firebase admin not initialized')
+  }
 }
 
 module.exports = admin

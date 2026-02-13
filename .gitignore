@@ -7,3 +7,8 @@ dist
 coverage
 tmp
 uploads
+ 
+# Firebase admin keys
+*adminsdk*.json
+serviceAccount*.json
+firebase-adminsdk*.json

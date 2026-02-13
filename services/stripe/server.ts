@@ -9,12 +9,10 @@
 
 import Stripe from 'stripe';
 
-let stripeInstance: Stripe | null = null;
-
-// Export a runtime-initialized Stripe client (null if not configured)
+// Safe, runtime-only Stripe initialization — only when key looks valid
 const stripeKey = process.env.STRIPE_SECRET_KEY;
 let stripe: Stripe | null = null;
-if (stripeKey) {
+if (stripeKey && stripeKey.startsWith('sk_')) {
   try {
     stripe = new Stripe(stripeKey, { apiVersion: '2024-06-20' });
     console.log('✅ Stripe initialized');
@@ -23,8 +21,10 @@ if (stripeKey) {
     stripe = null;
   }
 } else {
-  console.warn('⚠️ STRIPE_SECRET_KEY missing — billing disabled.');
+  console.warn('⚠️ STRIPE_SECRET_KEY missing/invalid — billing disabled.');
 }
+
+let stripeInstance: Stripe | null = stripe;
 
 /**
  * Require an environment variable at runtime
@@ -52,28 +52,12 @@ export function requireEnv(name: string): string {
  * @returns {Stripe} Configured Stripe instance
  */
 export function getStripe(): Stripe {
-  // Return cached instance if available
-  if (stripeInstance) {
-    return stripeInstance;
+  if (stripeInstance) return stripeInstance;
+  const apiKey = process.env.STRIPE_SECRET_KEY;
+  if (!apiKey || !apiKey.startsWith('sk_')) {
+    throw new Error('STRIPE_SECRET_KEY is not configured or invalid');
   }
-
-  // Validate API key
-  const apiKey = requireEnv('STRIPE_SECRET_KEY');
-
-  // Ensure we have a real key, not a placeholder
-  if (apiKey === 'sk_test_missing_key' || apiKey.length < 20) {
-    throw new Error(
-      'STRIPE_SECRET_KEY appears to be invalid. ' +
-      'Please provide a valid Stripe secret key from your dashboard.'
-    );
-  }
-
-  // Create and cache the Stripe instance
-  stripeInstance = new Stripe(apiKey, {
-    apiVersion: '2026-01-28.clover',
-    typescript: true,
-  });
-
+  stripeInstance = new Stripe(apiKey, { apiVersion: '2024-06-20' });
   return stripeInstance;
 }
 
@@ -86,8 +70,7 @@ export function getStripe(): Stripe {
  * @returns {boolean} True if STRIPE_SECRET_KEY is configured
  */
 export function isStripeConfigured(): boolean {
-  const apiKey = process.env.STRIPE_SECRET_KEY;
-  return !!(apiKey && apiKey !== 'sk_test_missing_key' && apiKey.length >= 20);
+  return !!(stripe);
 }
 
 export { stripe };

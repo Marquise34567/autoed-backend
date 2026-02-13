@@ -22,7 +22,7 @@ router.post('/', async (req, res) => {
       const bucketName = process.env.FIREBASE_STORAGE_BUCKET || null
       if (admin && admin.storage && bucketName) {
         const bucket = admin.storage().bucket(bucketName)
-        const destPath = (folder || path) ? `${folder || path}/${filename}`.replace(/\/g, '/') : filename
+        const destPath = (folder || path) ? `${folder || path}/${filename}`.replace(/\\/g, '/') : filename
         const file = bucket.file(destPath)
         const expires = Date.now() + 15 * 60 * 1000 // 15 minutes
         const [url] = await file.getSignedUrl({
