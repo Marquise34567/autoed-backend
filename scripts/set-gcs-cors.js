@@ -32,7 +32,13 @@ async function main() {
 
     console.log('Using bucket:', bucketName)
 
-    const storage = new Storage({ projectId: sa.project_id, credentials: sa })
+    let storage
+    if (sa) {
+      storage = new Storage({ projectId: sa.project_id, credentials: sa })
+    } else {
+      console.log('FIREBASE_SERVICE_ACCOUNT_JSON not provided; falling back to Application Default Credentials')
+      storage = new Storage()
+    }
     const bucket = storage.bucket(bucketName)
 
     const corsConfig = [
@@ -40,10 +46,10 @@ async function main() {
         origin: [
           'https://autoeditor.app',
           'https://www.autoeditor.app',
-          'https://*.vercel.app'
+          'https://vercel.app'
         ],
         method: ['GET','HEAD','PUT','POST','DELETE','OPTIONS'],
-        responseHeader: ['Content-Type','Content-Length','x-goog-resumable','x-goog-meta-*','Authorization'],
+        responseHeader: ['Content-Type','Content-Length','x-goog-resumable','Authorization','X-Goog-Upload-Protocol','X-Goog-Upload-Status'],
         maxAgeSeconds: 3600
       }
     ]
@@ -68,41 +74,6 @@ async function main() {
     console.log('CORS update complete')
   } catch (err) {
     console.error('Error:', err && err.message ? err.message : err)
-    process.exitCode = 2
-  }
-}
-
-main()
-// Script to set CORS on the configured GCS bucket via Firebase Admin
-// Usage: ensure FIREBASE_SERVICE_ACCOUNT_JSON and FIREBASE_STORAGE_BUCKET are set, then
-//   node scripts/set-gcs-cors.js
-
-const admin = require('../utils/firebaseAdmin')
-
-async function main() {
-  try {
-    const rawBucket = process.env.FIREBASE_STORAGE_BUCKET
-    if (!rawBucket) throw new Error('FIREBASE_STORAGE_BUCKET not set')
-    const normalized = rawBucket.replace(/^gs:\/\//i, '')
-    const parts = normalized.split('/')
-    const bucketName = parts.shift()
-
-    const bucket = admin.storage().bucket(bucketName)
-
-    const corsConfig = [
-      {
-        origin: ['https://autoeditor.app', 'https://www.autoeditor.app'],
-        method: ['GET', 'HEAD', 'PUT', 'POST', 'OPTIONS'],
-        responseHeader: ['Content-Type', 'Authorization', 'X-Goog-Upload-Status', 'X-Goog-Upload-Protocol'],
-        maxAgeSeconds: 3600,
-      },
-    ]
-
-    console.log('Setting CORS on bucket:', bucketName)
-    await bucket.setMetadata({ cors: corsConfig })
-    console.log('CORS set successfully')
-  } catch (err) {
-    console.error('Failed to set CORS:', err && err.message ? err.message : err)
     process.exitCode = 2
   }
 }

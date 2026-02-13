@@ -1,0 +1,12 @@
+[
+  {
+    "origin": [
+      "https://autoeditor.app",
+      "https://www.autoeditor.app",
+      "https://vercel.app"
+    ],
+    "method": ["GET", "HEAD", "PUT", "POST", "DELETE", "OPTIONS"],
+    "responseHeader": ["Content-Type", "Content-Length", "x-goog-resumable", "Authorization", "X-Goog-Upload-Protocol", "X-Goog-Upload-Status"],
+    "maxAgeSeconds": 3600
+  }
+]

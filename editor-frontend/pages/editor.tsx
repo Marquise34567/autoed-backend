@@ -1,5 +1,4 @@
 import React, { useState } from 'react'
-import EditorShell from '../components/EditorShell'
 import TopToolbar from '../components/TopToolbar'
 import StatusCard from '../components/StatusCard'
 
@@ -46,12 +45,12 @@ function Uploader(){
 
 export default function EditorPage(){
   return (
-    <EditorShell>
+    <>
       <TopToolbar />
-      <div className="p-4 col-span-12">
+      <div className="p-4 col-span-12 bg-gray-900 min-h-screen text-white">
         <Uploader />
       </div>
       <StatusCard />
-    </EditorShell>
+    </>
   )
 }
