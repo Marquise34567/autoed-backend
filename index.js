@@ -3,6 +3,7 @@ if (process.env.NODE_ENV !== 'production') {
   try { require('dotenv').config() } catch (e) {}
 }
 const express = require('express')
+const cors = require('cors')
 
 // Boot log for entry file identification
 console.log('✅ Booting backend entry:', __filename)
@@ -11,19 +12,29 @@ const app = express()
 
 // Guaranteed CORS middleware: dynamically echo origin and allow credentials
 // Placed before any routes so CORS headers are always set for browser requests.
-app.use((req, res, next) => {
-  const origin = req.headers.origin;
-  if (origin) {
-    res.setHeader("Access-Control-Allow-Origin", origin);
-    res.setHeader("Vary", "Origin");
-  }
-  res.setHeader("Access-Control-Allow-Credentials", "true");
-  res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
-  const reqHeaders = req.headers["access-control-request-headers"];
-  res.setHeader("Access-Control-Allow-Headers", reqHeaders || "Content-Type, Authorization, X-Requested-With");
-  if (req.method === "OPTIONS") return res.sendStatus(204);
-  next();
-});
+// CORS allowlist using `cors` package. Allows production, www, localhost and Vercel previews.
+const allowedOrigins = [
+  'https://autoeditor.app',
+  'https://www.autoeditor.app',
+  'http://localhost:3000'
+]
+
+const corsOptions = {
+  origin: (origin, callback) => {
+    // Allow non-browser requests (curl, server-side) when no origin is provided
+    if (!origin) return callback(null, true)
+    if (allowedOrigins.includes(origin)) return callback(null, true)
+    // Allow any preview deployment on vercel.app (e.g. https://some-branch.vercel.app)
+    if (/^https:\/\/[A-Za-z0-9-]+\.vercel\.app$/.test(origin)) return callback(null, true)
+    return callback(new Error('Not allowed by CORS'))
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+}
+
+app.use(cors(corsOptions))
+app.options('*', cors(corsOptions))
 
 // Lightweight health endpoints
 app.get('/health', (req, res) => {

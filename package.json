@@ -8,9 +8,9 @@
   },
   "main": "index.js",
   "dependencies": {
-    "express": "*",
-    "cors": "*",
+    "cors": "^2.8.5",
     "dotenv": "*",
+    "express": "*",
     "firebase-admin": "*",
     "mime-types": "*",
     "stripe": "*"
