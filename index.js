@@ -217,6 +217,22 @@ app.use(
         return cb(null, true);
       }
 
+      // Allow subdomains of autoeditor.app (e.g. https://www.autoeditor.app)
+      if (/^https:\/\/(?:[A-Za-z0-9-]+\.)?autoeditor\.app(?:\:\d+)?$/.test(origin)) {
+        return cb(null, true)
+      }
+
+      // Allow Vercel preview deployments like https://some-branch.vercel.app
+      if (/^https:\/\/[A-Za-z0-9-]+\.vercel\.app(?:\:\d+)?$/.test(origin)) {
+        return cb(null, true)
+      }
+
+      // Allow Railway preview domains (if you deploy from the same repo)
+      if (/^https:\/\/[A-Za-z0-9-]+\.up\.railway\.app(?:\:\d+)?$/.test(origin)) {
+        return cb(null, true)
+      }
+
+      console.warn('[cors] blocked origin:', origin)
       return cb(new Error("CORS blocked for origin: " + origin));
     },
     credentials: true,
