@@ -200,6 +200,10 @@ app.use(express.json({ limit: '10mb' }))
 app.get('/api/health', (_req, res) => res.json({ status: 'ok' }))
 app.get('/', (_req, res) => res.json({ message: 'autoed-backend-ready' }))
 
+// Minimal fallbacks so endpoints respond even if route modules aren't mounted in the image
+app.get('/api/ping', (_req, res) => res.json({ pong: true }))
+app.get('/api/userdoc', (_req, res) => res.json({ ok: true }))
+
 // Mount existing route folders under /api when possible (non-fatal if module isn't an Express router)
 // Mount explicit routers under /api
 app.use('/api/health', require('./routes/health'))
