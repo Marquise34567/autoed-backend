@@ -1,13 +1,15 @@
 
 const admin = require('firebase-admin');
 
-const serviceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
-const storageBucket = process.env.FIREBASE_STORAGE_BUCKET;
+const rawServiceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+const rawStorageBucket = process.env.FIREBASE_STORAGE_BUCKET;
+const serviceAccountJson = rawServiceAccountJson && rawServiceAccountJson.trim();
+const storageBucket = rawStorageBucket && String(rawStorageBucket).trim();
 
 function getBucketName() {
   if (!storageBucket) return null
   // allow values like 'gs://bucket/name' or plain bucket name
-  return storageBucket.replace(/^gs:\/\//i, '')
+  return storageBucket.replace(/^gs:\/\//i, '').trim()
 }
 
 // Validate required env vars

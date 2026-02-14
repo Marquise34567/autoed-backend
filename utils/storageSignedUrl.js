@@ -15,8 +15,10 @@ async function getSignedUrlForPath(objectPath, expiresMinutes = 30, bucketName =
 
 function _extractPathFromStorageUrl(url) {
   if (!url || typeof url !== 'string') return null
+  // normalize: remove whitespace/newlines that may have been introduced
+  const cleaned = url.replace(/\s+/g, '')
   // match https://storage.googleapis.com/<bucket>/<path>
-  const m = url.match(/^https?:\/\/storage.googleapis.com\/(?:([^\/]+)\/)??(.+)$/i)
+  const m = cleaned.match(/^https?:\/\/storage.googleapis.com\/(?:([^\/]+)\/)??(.+)$/i)
   if (!m) return null
   const bucket = m[1] || null
   const path = m[2]
