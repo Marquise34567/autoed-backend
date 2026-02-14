@@ -15,56 +15,31 @@ const app = express()
 
 const cors = require('cors')
 
+// Allowlist for production frontend(s) and optional preview URL from env
 const allowedOrigins = [
-  'https://www.autoeditor.app',
   'https://autoeditor.app',
+  'https://www.autoeditor.app',
 ]
-
+if (process.env.VERCEL_URL) allowedOrigins.push(`https://${process.env.VERCEL_URL}`)
 const localhostRegex = /^http:\/\/localhost(?::\d+)?$/i
 
-// Early preflight handler: respond to OPTIONS before other middleware.
-// This avoids any origin-callback errors and guarantees a 204 for preflight.
-app.use((req, res, next) => {
-  const origin = req.headers.origin
+// Standard CORS middleware: must be registered before any routes
+app.use(
+  cors({
+    origin: function (origin, callback) {
+      // Allow server-to-server requests with no Origin header
+      if (!origin) return callback(null, true)
+      if (allowedOrigins.includes(origin) || localhostRegex.test(origin)) return callback(null, true)
+      return callback(new Error('Not allowed by CORS'))
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+  })
+)
 
-  const isAllowed = !origin || allowedOrigins.includes(origin) || localhostRegex.test(origin)
-
-  if (origin && (allowedOrigins.includes(origin) || localhostRegex.test(origin))) {
-    res.setHeader('Access-Control-Allow-Origin', origin)
-    res.setHeader('Vary', 'Origin')
-    res.setHeader('Access-Control-Allow-Credentials', 'true')
-    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS')
-    res.setHeader('Access-Control-Allow-Headers', req.headers['access-control-request-headers'] || 'Content-Type, Authorization')
-    res.setHeader('Access-Control-Max-Age', '86400')
-  }
-
-  if (req.method === 'OPTIONS') {
-    // Always end preflight here with 204 to avoid upstream errors
-    return res.sendStatus(204)
-  }
-
-  next()
-})
-
-const corsOptions = {
-  origin: function (origin, callback) {
-    // Allow server-to-server requests with no Origin header
-    if (!origin) return callback(null, true)
-
-    if (allowedOrigins.includes(origin) || localhostRegex.test(origin)) {
-      return callback(null, true)
-    }
-
-    // Deny CORS silently (do not throw)
-    return callback(null, false)
-  },
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-}
-
-app.use(cors(corsOptions))
-app.options(/.*/, cors(corsOptions))
+// Ensure preflight requests are handled
+app.options('*', cors())
 
 // Log CORS origin on every request for deploy verification
 app.use((req, res, next) => {
