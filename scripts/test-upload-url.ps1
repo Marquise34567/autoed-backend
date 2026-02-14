@@ -9,18 +9,25 @@ Write-Host "POST $BackendUrl/api/upload-url -> body: $body"
 try {
   $resp = Invoke-RestMethod -Uri "$BackendUrl/api/upload-url" -Method Post -Body $body -ContentType 'application/json' -ErrorAction Stop
   Write-Host "Response JSON:`n" ($resp | ConvertTo-Json -Depth 5)
-  if ($resp.signedUrl -and $resp.signedUrl -ne '') {
-    Write-Host "signedUrl found"
+  if ($resp.uploadUrl -and $resp.uploadUrl -ne '') {
+    Write-Host "uploadUrl found"
   } else {
-    Write-Host "ERROR: signedUrl missing in response"
+    Write-Host "ERROR: uploadUrl missing in response"
     exit 2
   }
-  # Attempt a PUT upload to the signed URL using a small test file
+  # Attempt a PUT upload to the uploadUrl using a small test file (do NOT set Content-Type)
   $tmpPath = Join-Path $PSScriptRoot 'tmp-upload.bin'
   [System.IO.File]::WriteAllBytes($tmpPath, [System.Text.Encoding]::UTF8.GetBytes('hello'))
   Write-Host "Uploading test file to signedUrl..."
   try {
-    $putResp = Invoke-RestMethod -Uri $resp.signedUrl -Method Put -InFile $tmpPath -ContentType $ContentType -ErrorAction Stop
+    $putReq = [System.Net.WebRequest]::Create($resp.uploadUrl)
+    $putReq.Method = 'PUT'
+    $data = [System.IO.File]::ReadAllBytes($tmpPath)
+    $putReq.ContentLength = $data.Length
+    $stream = $putReq.GetRequestStream()
+    $stream.Write($data, 0, $data.Length)
+    $stream.Close()
+    $putResp = $putReq.GetResponse()
     Write-Host "Upload succeeded"
   } catch {
     Write-Host "Upload failed:" $_.Exception.Message

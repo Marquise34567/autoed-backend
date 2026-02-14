@@ -345,9 +345,9 @@ app.get('/api/jobs', (req, res) => {
 app.post('/api/upload-url', (req, res) => {
   ;(async () => {
     try {
-      const { filename, contentType, mime } = req.body || {}
-      const ct = contentType || mime || null
-      if (!filename || !ct) return res.status(400).json({ ok: false, error: 'Missing filename or contentType' })
+      const { fileName, contentType, filename } = req.body || {}
+      const finalName = fileName || filename
+      if (!finalName || !contentType) return res.status(400).json({ ok: false, error: 'Missing fileName or contentType' })
 
       let adminFallback = null
       try {
@@ -361,20 +361,22 @@ app.post('/api/upload-url', (req, res) => {
       }
 
       try {
-        const bucketName = process.env.FIREBASE_STORAGE_BUCKET || undefined
-        const bucket = bucketName ? adminFallback.storage().bucket(bucketName) : adminFallback.storage().bucket()
-        const safeFilename = String(filename).replace(/[^a-zA-Z0-9._-]/g, '_')
+        const bucketName = process.env.FIREBASE_STORAGE_BUCKET
+        if (!bucketName) return res.status(500).json({ ok: false, error: 'FIREBASE_STORAGE_BUCKET is not set' })
+        const bucket = adminFallback.storage().bucket(bucketName)
+        const safeFilename = String(finalName).replace(/[^a-zA-Z0-9._-]/g, '_')
         const destPath = `uploads/${Date.now()}-${safeFilename}`
         const file = bucket.file(destPath)
         const expiresAt = new Date(Date.now() + 15 * 60 * 1000)
 
-        const [signedUrl] = await file.getSignedUrl({ version: 'v4', action: 'write', expires: expiresAt, contentType: ct })
+        // Sign and bind Content-Type so browser PUT must match
+        const [signedUrl] = await file.getSignedUrl({ version: 'v4', action: 'write', expires: expiresAt, contentType })
         console.log('[upload-url fallback] signedUrl generated:', !!signedUrl, { path: destPath, bucket: bucket.name })
         if (!signedUrl || typeof signedUrl !== 'string') {
-          console.error('[upload-url fallback] signedUrl is invalid', { path: destPath, bucket: bucket.name, contentType: ct })
+          console.error('[upload-url fallback] signedUrl is invalid', { path: destPath, bucket: bucket.name })
           return res.status(500).json({ error: 'SIGNED_URL_FAILED', details: 'signedUrl undefined' })
         }
-        return res.status(200).json({ signedUrl, path: destPath, publicUrl: null })
+        return res.status(200).json({ uploadUrl: signedUrl, path: destPath, publicUrl: null })
       } catch (err) {
         console.error('[upload-url fallback] firebase error:', err && (err.message || err))
         return res.status(500).json({ ok: false, error: 'Failed to generate signed URL', details: err && err.message ? err.message : String(err) })

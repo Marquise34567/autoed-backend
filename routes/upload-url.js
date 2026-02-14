@@ -22,60 +22,47 @@ try {
 router.post('/', async (req, res) => {
   const requestId = Date.now() + ':' + Math.floor(Math.random() * 10000)
   try {
-    const { filename, contentType, mime } = req.body || {}
-    console.log(`[upload-url:${requestId}] request body:`, { filename, contentType })
-    const ct = contentType || mime || mimeLib.lookup(filename) || null
-    if (!filename || !ct) {
-      return res.status(400).json({ error: 'Missing filename or contentType', details: 'Provide filename and contentType in JSON body' })
+    const { fileName, contentType, filename, mime } = req.body || {}
+    // support both fileName and filename param names
+    const finalName = fileName || filename
+    console.log(`[upload-url:${requestId}] request body:`, { fileName: finalName, contentType })
+
+    if (!finalName || !contentType) {
+      return res.status(400).json({ error: 'Missing fileName or contentType' })
     }
 
-    if (!admin || !admin.storage) {
-      console.error(`[upload-url:${requestId}] Firebase admin not configured`)
-      return res.status(500).json({ error: 'Firebase admin not configured' })
+    const bucketName = process.env.FIREBASE_STORAGE_BUCKET
+    if (!bucketName) {
+      console.error(`[upload-url:${requestId}] FIREBASE_STORAGE_BUCKET is not set`)
+      return res.status(500).json({ error: 'FIREBASE_STORAGE_BUCKET is not set' })
     }
 
-    try {
-      const bucketName = (admin.getBucketName && admin.getBucketName()) || undefined
-      const bucket = admin.getBucket ? admin.getBucket(bucketName) : (bucketName ? admin.storage().bucket(bucketName) : admin.storage().bucket())
-
-      // generate unique, safe path
-      const safeFilename = String(filename).replace(/[^a-zA-Z0-9._-]/g, '_')
-      const destPath = `uploads/${Date.now()}-${safeFilename}`
-
-      const file = bucket.file(destPath)
-      // Use a Date instance for expires to be explicit
-      const expiresAt = new Date(Date.now() + 15 * 60 * 1000) // 15 minutes
-
-      const [signedUrl] = await file.getSignedUrl({
-        version: 'v4',
-        action: 'write',
-        expires: expiresAt,
-        contentType: ct,
-      })
-
-      // Confirm signedUrl exists for frontend expectations
-      console.log(`[upload-url:${requestId}] signedUrl generated:`, !!signedUrl, { path: destPath, bucket: bucket.name })
-      if (!signedUrl || typeof signedUrl !== 'string') {
-        console.error(`[upload-url:${requestId}] signedUrl is invalid`, { path: destPath, bucket: bucket.name, contentType: ct })
-        return res.status(500).json({ error: 'SIGNED_URL_FAILED', details: 'signedUrl undefined' })
-      }
-
-      // Build required headers contract for the frontend
-      const requiredHeaders = {
-        'Content-Type': ct,
-      }
-
-      // Log bucket name and return contract including required headers
-      console.log(`[upload-url:${requestId}] returning signedUrl for bucket:`, bucket.name)
-      return res.status(200).json({ signedUrl, path: destPath, publicUrl: null, requiredHeaders, bucket: bucket.name })
-    } catch (err) {
-      // Log non-sensitive error info
-      console.error(`[upload-url:${requestId}] firebase error:`, err && (err.message || err))
-      return res.status(500).json({ error: 'SIGNED_URL_FAILED', details: err && err.message ? err.message : String(err) })
+    const bucket = admin && admin.storage ? admin.storage().bucket(bucketName) : null
+    if (!bucket) {
+      console.error(`[upload-url:${requestId}] Firebase admin/storage not available`)
+      return res.status(500).json({ error: 'Firebase admin/storage not available' })
     }
+
+    // generate unique, safe path
+    const safeFilename = String(finalName).replace(/[^a-zA-Z0-9._-]/g, '_')
+    const destPath = `uploads/${Date.now()}-${safeFilename}`
+
+    const file = bucket.file(destPath)
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000) // 15 minutes
+
+    // Sign the URL and bind Content-Type so the browser PUT must match
+    const [uploadUrl] = await file.getSignedUrl({
+      version: 'v4',
+      action: 'write',
+      expires: expiresAt,
+      contentType: contentType,
+    })
+
+    console.log(`[upload-url:${requestId}] signedUrl generated:`, !!uploadUrl, { path: destPath, bucket: bucket.name })
+    return res.status(200).json({ uploadUrl, filePath: destPath })
   } catch (err) {
     console.error(`[upload-url:${requestId}] handler error`, err && (err.stack || err.message || err))
-    return res.status(500).json({ error: err && err.message ? err.message : 'Internal server error' })
+    return res.status(500).json({ error: 'Failed to create signed URL' })
   }
 })
 

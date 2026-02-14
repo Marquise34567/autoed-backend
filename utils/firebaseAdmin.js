@@ -37,7 +37,7 @@ if (!serviceAccount) {
 function getBucketName() {
   const env = (process.env.FIREBASE_STORAGE_BUCKET || '').trim()
   if (env) return env.replace(/^gs:\/\//i, '')
-  const projectId = serviceAccount.project_id || process.env.FIREBASE_PROJECT_ID
+  const projectId = process.env.FIREBASE_PROJECT_ID
   if (projectId) return `${projectId}.appspot.com`
   return null
 }

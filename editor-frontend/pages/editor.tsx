@@ -19,12 +19,16 @@ function Uploader(){
       const resp = await fetch(`${backendBase}/api/upload-url`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
       if (!resp.ok) throw new Error(await resp.text())
       const json = await resp.json()
-      if (!json.signedUrl) throw new Error('No signedUrl in response')
+      if (!json.uploadUrl) throw new Error('No uploadUrl in response')
 
       setStatus('uploading')
-      // Use requiredHeaders from backend if provided to ensure signature matches
-      const headers = Object.assign({}, json.requiredHeaders || {}, { 'Content-Type': body.contentType })
-      const putResp = await fetch(json.signedUrl, { method: 'PUT', headers, body: file, credentials: 'omit' })
+      // Set Content-Type header to match the signed URL's contentType
+      const putResp = await fetch(json.uploadUrl, {
+        method: 'PUT',
+        headers: { 'Content-Type': file.type || 'application/octet-stream' },
+        body: file,
+        credentials: 'omit',
+      })
       if (!putResp.ok) {
         const text = await putResp.text()
         throw new Error(`Upload failed: ${putResp.status} ${text}`)

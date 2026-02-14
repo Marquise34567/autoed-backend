@@ -12,7 +12,9 @@ const { URL } = require('url')
 function putToSignedUrl(signedUrl, body, ct) {
   const u = new URL(signedUrl)
   const lib = u.protocol === 'https:' ? https : http
-  const opts = { method: 'PUT', headers: { 'Content-Type': ct, 'Content-Length': Buffer.byteLength(body) } }
+  const headers = { 'Content-Length': Buffer.byteLength(body) }
+  if (ct) headers['Content-Type'] = ct
+  const opts = { method: 'PUT', headers }
   return new Promise((resolve, reject) => {
     const req = lib.request(u, opts, (res) => {
       let b = ''
@@ -27,8 +29,8 @@ function putToSignedUrl(signedUrl, body, ct) {
 }
 
 router.post('/signed-put-test', async (req, res) => {
-  const { filename, contentType } = req.body || {}
-  if (!filename || !contentType) return res.status(400).json({ error: 'Missing filename or contentType' })
+  const { filename } = req.body || {}
+  if (!filename) return res.status(400).json({ error: 'Missing filename' })
   if (!admin || !admin.storage) return res.status(500).json({ error: 'Firebase admin not configured' })
   try {
     const bucketName = (admin.getBucketName && admin.getBucketName()) || undefined
@@ -37,8 +39,10 @@ router.post('/signed-put-test', async (req, res) => {
     const destPath = `uploads/test-${Date.now()}-${safeFilename}`
     const file = bucket.file(destPath)
     const expiresAt = new Date(Date.now() + 15 * 60 * 1000)
-    const [signedUrl] = await file.getSignedUrl({ version: 'v4', action: 'write', expires: expiresAt, contentType: contentType })
-    const put = await putToSignedUrl(signedUrl, 'hello', contentType)
+    const ct = req.body && (req.body.contentType || req.body.contenttype || null)
+    // Sign and bind contentType if provided
+    const [signedUrl] = await file.getSignedUrl({ version: 'v4', action: 'write', expires: expiresAt, contentType: ct || undefined })
+    const put = await putToSignedUrl(signedUrl, 'hello', ct)
     return res.json({ ok: true, signedUrlProvided: !!signedUrl, putStatus: put.status, putBody: put.body, path: destPath })
   } catch (err) {
     return res.status(500).json({ error: err && err.message ? err.message : String(err) })

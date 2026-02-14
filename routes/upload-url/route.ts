@@ -7,7 +7,8 @@ import { randomUUID } from 'crypto'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-const BUCKET_NAME = getBucketName() || 'videos'
+// Derive bucket name from env or project id; do not fall back to an arbitrary bucket
+const BUCKET_NAME = process.env.FIREBASE_STORAGE_BUCKET || (process.env.FIREBASE_PROJECT_ID ? `${process.env.FIREBASE_PROJECT_ID}.appspot.com` : null)
 const MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024 // 2GB
 const SIGNED_URL_EXPIRES_IN = 3600 // 1 hour in seconds
 
@@ -69,7 +70,7 @@ export async function POST(request: Request) {
 
     // Step 3: Parse request body
     console.log(`${logPrefix} Parsing request body...`)
-    let body: { filename: string; contentType: string; size?: number }
+    let body: { filename: string; contentType?: string; size?: number }
     try {
       body = (await request.json()) as typeof body
     } catch (e) {
@@ -87,13 +88,14 @@ export async function POST(request: Request) {
 
     const { filename, contentType, size } = body
 
-    // Validate required fields
-    if (!filename || !contentType) {
-      console.error(`${logPrefix} Missing required fields: filename=${!!filename}, contentType=${!!contentType}`)
+    // filename is required; contentType is optional so the signed URL is not
+    // bound to a Content-Type header (prevents SignatureDoesNotMatch).
+    if (!filename) {
+      console.error(`${logPrefix} Missing required field: filename`)
       return NextResponse.json(
         {
           error: 'Missing required fields',
-          details: 'filename and contentType are required',
+          details: 'filename is required',
           missingEnv: [],
           bucketExists: null,
         },
@@ -101,8 +103,7 @@ export async function POST(request: Request) {
       )
     }
 
-    // Validate video MIME type
-    if (!contentType.startsWith('video/')) {
+    if (contentType && !contentType.startsWith('video/')) {
       console.error(`${logPrefix} Invalid content type:`, contentType)
       return NextResponse.json(
         {
@@ -134,7 +135,8 @@ export async function POST(request: Request) {
     console.log(`${logPrefix} Checking Firebase storage bucket '${BUCKET_NAME}'...`)
     let bucket
     try {
-      bucket = getBucket(BUCKET_NAME)
+      if (!BUCKET_NAME) throw new Error('FIREBASE_STORAGE_BUCKET not configured and FIREBASE_PROJECT_ID missing')
+      bucket = admin.storage().bucket(BUCKET_NAME)
       const [exists] = await bucket.exists()
       if (!exists) {
         console.error(`${logPrefix} Bucket does not exist: ${BUCKET_NAME}`)
@@ -168,10 +170,10 @@ export async function POST(request: Request) {
     try {
       const file = bucket.file(storagePath)
       const expiresAt = new Date(Date.now() + SIGNED_URL_EXPIRES_IN * 1000)
-      const [signedUrl] = await file.getSignedUrl({ version: 'v4', action: 'write', expires: expiresAt })
+      const [uploadUrl] = await file.getSignedUrl({ version: 'v4', action: 'write', expires: expiresAt })
 
       console.log(`${logPrefix} ✓ Signed URL created successfully`)
-      return NextResponse.json({ signedUrl, path: storagePath, jobId, tokenExpiresIn: SIGNED_URL_EXPIRES_IN }, { status: 200 })
+      return NextResponse.json({ uploadUrl, path: storagePath, jobId, tokenExpiresIn: SIGNED_URL_EXPIRES_IN }, { status: 200 })
     } catch (e: any) {
       console.error(`${logPrefix} Failed to create signed upload URL:`, e?.message || e)
       return NextResponse.json({ error: 'Failed to generate upload URL', details: e?.message || String(e) }, { status: 500 })

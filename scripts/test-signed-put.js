@@ -28,7 +28,9 @@ async function postJson(path, body) {
 async function putToSignedUrl(signedUrl, body, ct) {
   const u = new URL(signedUrl)
   const lib = u.protocol === 'https:' ? https : http
-  const opts = { method: 'PUT', headers: { 'Content-Type': ct, 'Content-Length': Buffer.byteLength(body) } }
+  const headers = { 'Content-Length': Buffer.byteLength(body) }
+  if (ct) headers['Content-Type'] = ct
+  const opts = { method: 'PUT', headers }
   return new Promise((resolve, reject) => {
     const req = lib.request(u, opts, (res) => {
       let b = ''
@@ -48,13 +50,13 @@ async function putToSignedUrl(signedUrl, body, ct) {
     const resp = await postJson('/api/upload-url', { filename, contentType })
     console.log('Signed URL response status:', resp.status)
     const parsed = JSON.parse(resp.body || '{}')
-    if (!parsed.signedUrl) {
-      console.error('No signedUrl in response:', parsed)
+    if (!parsed.uploadUrl) {
+      console.error('No uploadUrl in response:', parsed)
       process.exitCode = 2
       return
     }
-    console.log('Got signedUrl. Performing PUT...')
-    const put = await putToSignedUrl(parsed.signedUrl, 'hello', contentType)
+    console.log('Got uploadUrl. Performing PUT with Content-Type header...')
+    const put = await putToSignedUrl(parsed.uploadUrl, 'hello', contentType)
     console.log('PUT status:', put.status)
     console.log('PUT body:', put.body)
   } catch (err) {
