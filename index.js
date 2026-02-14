@@ -20,26 +20,29 @@ const allowedOrigins = [
   'https://autoeditor.app',
   'https://www.autoeditor.app',
 ]
+// Optional: Vercel preview host from environment
 if (process.env.VERCEL_URL) allowedOrigins.push(`https://${process.env.VERCEL_URL}`)
 const localhostRegex = /^http:\/\/localhost(?::\d+)?$/i
+const vercelPreviewRegex = /^https:\/\/autoeddd-.*\.vercel\.app$/
 
-// Standard CORS middleware: must be registered before any routes
-app.use(
-  cors({
-    origin: function (origin, callback) {
-      // Allow server-to-server requests with no Origin header
-      if (!origin) return callback(null, true)
-      if (allowedOrigins.includes(origin) || localhostRegex.test(origin)) return callback(null, true)
-      return callback(new Error('Not allowed by CORS'))
-    },
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
-  })
-)
+// CORS options object used by both the global middleware and preflight handler
+const corsOptions = {
+  origin: function (origin, callback) {
+    // Allow server-to-server requests with no Origin header
+    if (!origin) return callback(null, true)
+    if (allowedOrigins.includes(origin) || localhostRegex.test(origin) || vercelPreviewRegex.test(origin)) return callback(null, true)
+    return callback(new Error('Not allowed by CORS'))
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+}
 
-// Ensure preflight requests are handled
-app.options(/.*/, cors())
+// Register CORS middleware globally before routes
+app.use(cors(corsOptions))
+
+// Ensure preflight requests are handled (avoid using '*' pattern)
+app.options(/.*/, cors(corsOptions))
 
 // Log CORS origin on every request for deploy verification
 app.use((req, res, next) => {
