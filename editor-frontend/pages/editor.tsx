@@ -31,12 +31,15 @@ function Uploader(){
         console.warn('Could not parse uploadUrl for debug logging')
       }
 
-      // Do NOT set Content-Type header manually — let the browser set it.
-      const putResp = await fetch(json.uploadUrl, { method: 'PUT', body: file })
-      console.log('PUT response status:', putResp.status)
-      if (!putResp.ok) {
-        const text = await putResp.text()
-        throw new Error(`Upload failed: ${putResp.status} ${text}`)
+      const uploadUrl = json.uploadUrl
+
+      const uploadResponse = await fetch(uploadUrl, {
+        method: "PUT",
+        body: file
+      });
+
+      if (!uploadResponse.ok) {
+        throw new Error("Upload failed with status " + uploadResponse.status);
       }
       setStatus('uploaded')
     } catch (e: any) {
