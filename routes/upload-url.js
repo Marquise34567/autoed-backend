@@ -43,7 +43,9 @@ router.post('/', async (req, res) => {
     const { fileName, contentType, filename, mime, enforceContentType } = req.body || {}
     // support both fileName and filename param names
     const finalName = fileName || filename
+    // Log contentType for validation
     console.log(`[upload-url:${requestId}] request body:`, { fileName: finalName, contentType, enforceContentType })
+    console.log(`[upload-url:${requestId}] contentType used for signing:`, contentType || 'application/octet-stream')
 
     if (!finalName) {
       return res.status(400).json({ error: 'Missing fileName' })
@@ -69,6 +71,8 @@ router.post('/', async (req, res) => {
 
     // Create v4 signed URL for write (PUT). Sign Content-Type to match browser PUT.
     const ct = contentType || 'application/octet-stream'
+    // Log contentType before signing
+    console.log(`[upload-url:${requestId}] getSignedUrl contentType:`, ct)
     const [uploadUrl] = await file.getSignedUrl({ version: 'v4', action: 'write', expires: expiresAt, contentType: ct })
 
     // Log query params helpful for debugging SignatureDoesNotMatch

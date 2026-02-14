@@ -115,7 +115,8 @@ export async function POST(request: Request) {
     const { filename, contentType, size } = body
 
     // Validate required fields (only filename required). contentType is optional
-    // because signing must NOT bind to Content-Type to avoid SignatureDoesNotMatch
+    // Log contentType for validation
+    console.log(`${logPrefix} contentType received:`, contentType)
     if (!filename) {
       console.error(`${logPrefix} Missing required field: filename`)
       return NextResponse.json(
@@ -207,6 +208,8 @@ export async function POST(request: Request) {
 
       // Create V4 signed URL for write (PUT). Sign Content-Type so browser PUT matches.
       const contentTypeHeader = contentType || 'application/octet-stream'
+      // Log contentType before signing
+      console.log(`${logPrefix} getSignedUrl contentType:`, contentTypeHeader)
       const [uploadUrl] = await file.getSignedUrl({ version: 'v4', action: 'write', expires: expiresAt, contentType: contentTypeHeader })
 
       // Log query params for debugging

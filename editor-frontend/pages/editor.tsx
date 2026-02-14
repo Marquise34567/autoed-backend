@@ -9,7 +9,6 @@ function Uploader(){
   async function handleUpload(){
     if (!file) return setStatus('select a file')
     setStatus('requesting signed url')
-    try {
       const contentType = file.type || 'application/octet-stream'
       const body = { filename: file.name, contentType }
       // Prefer explicit API base env var; default to local dev or Railway production
@@ -34,6 +33,44 @@ function Uploader(){
 
       const uploadUrl = json.uploadUrl
 
+      const putRes = await fetch(uploadUrl, {
+        method: 'PUT',
+        headers: { 'Content-Type': contentType },
+        body: file,
+        credentials: 'omit'
+      })
+
+      if (!putRes.ok) {
+        const text = await putRes.text()
+    try {
+      const contentType = file.type || 'application/octet-stream'
+      // Log contentType for validation
+      console.log('Frontend contentType used for signed URL and upload:', contentType)
+      const body = { filename: file.name, contentType }
+      // Prefer explicit API base env var; default to local dev or Railway production
+      const backendBase = process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8080'
+      if (!process.env.NEXT_PUBLIC_API_BASE_URL) {
+        console.warn('NEXT_PUBLIC_API_BASE_URL not set; defaulting to', backendBase)
+      }
+      const resp = await fetch(`${backendBase}/api/upload-url`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      if (!resp.ok) throw new Error(await resp.text())
+      const json = await resp.json()
+      if (!json.uploadUrl) throw new Error('No uploadUrl in response')
+
+      setStatus('uploading')
+      // Log the signed URL and its query params for debugging
+      try {
+        console.log('Upload URL (from server):', json.uploadUrl)
+        const u = new URL(json.uploadUrl)
+        console.log('Signed URL params:', { 'X-Goog-SignedHeaders': u.searchParams.get('X-Goog-SignedHeaders'), 'X-Goog-Signature': u.searchParams.get('X-Goog-Signature') ? 'present' : 'missing' })
+      } catch (e) {
+        console.warn('Could not parse uploadUrl for debug logging')
+      }
+
+      const uploadUrl = json.uploadUrl
+
+      // Log contentType before upload
+      console.log('Frontend contentType used for upload PUT:', contentType)
       const putRes = await fetch(uploadUrl, {
         method: 'PUT',
         headers: { 'Content-Type': contentType },
