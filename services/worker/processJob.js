@@ -178,14 +178,14 @@ async function processJob(jobId, inputSpec) {
       throw new Error('No input source provided or download failed')
     }
 
-    // Processing step: run FFmpeg to produce an MP4 output from the input
+    // Processing step: run retention-edit pipeline (transcribe -> AI plan -> trim+concat)
     console.log(`PROCESSING ${jobId}`)
-    console.log(`[worker:${jobId}] running pipeline on ${localIn}`)
+    console.log(`[worker:${jobId}] running retention-edit pipeline on ${localIn}`)
     const stat = fs.statSync(localIn)
     const outDir = path.resolve(os.tmpdir(), 'autoed', 'results')
     fs.mkdirSync(outDir, { recursive: true })
 
-    // Prepare local result JSON
+    // Prepare local result JSON (kept for backward compatibility)
     const result = {
       jobId,
       inputSize: stat.size,
@@ -195,23 +195,215 @@ async function processJob(jobId, inputSpec) {
     const localResult = path.resolve(outDir, `${jobId}-result.json`)
     fs.writeFileSync(localResult, JSON.stringify(result, null, 2))
 
-    // Produce output video (MP4)
-    const localOut = path.resolve(outDir, `${jobId}-output.mp4`)
-    const ffmpegCmd = `ffmpeg -y -i "${localIn}" -c:v libx264 -preset veryfast -crf 23 -c:a aac -movflags +faststart "${localOut}"`
-    try {
-      console.log(`[worker:${jobId}] Running FFmpeg: ${ffmpegCmd}`)
-      await new Promise((resolve, reject) => {
-        const proc = exec(ffmpegCmd, { maxBuffer: 1024 * 1024 * 50 }, (error, stdout, stderr) => {
-          if (error) return reject(error)
-          return resolve({ stdout, stderr })
-        })
-        if (proc.stdout && proc.stdout.on) proc.stdout.on('data', (d) => console.log(`[worker:${jobId}] ffmpeg: ${String(d).trim()}`))
-        if (proc.stderr && proc.stderr.on) proc.stderr.on('data', (d) => console.log(`[worker:${jobId}] ffmpeg: ${String(d).trim()}`))
-      })
-      console.log(`[worker:${jobId}] FFmpeg finished, output at ${localOut}`)
-    } catch (e) {
-      console.warn(`[worker:${jobId}] FFmpeg failed, will still upload result.json:`, e && (e.message || e))
+    // Helper: update job stage
+    async function setStage(stage, percent, message) {
+      try {
+        await db.collection('jobs').doc(jobId).set({ stage, progress: percent, message, updatedAt: Date.now() }, { merge: true })
+      } catch (e) {}
     }
+
+    // 1) Extract audio for transcription
+    await setStage('Adding Hooks', 25, 'Extracting audio for transcription')
+    const audioPath = path.resolve(outDir, `${jobId}-audio.wav`)
+    const extractCmd = `ffmpeg -y -i "${localIn}" -vn -ac 1 -ar 16000 -hide_banner -loglevel error "${audioPath}"`
+    console.log('[worker] extract audio cmd:', extractCmd)
+    await new Promise((resolve, reject) => {
+      exec(extractCmd, { maxBuffer: 1024 * 1024 * 20 }, (err) => err ? reject(err) : resolve())
+    }).catch(e => { console.warn('[worker] audio extract failed', e && e.message || e) })
+
+    // 2) Transcribe using OpenAI Whisper (if OPENAI_API_KEY present)
+    let transcriptText = null
+    let transcriptSegments = null
+    const OPENAI_KEY = process.env.OPENAI_API_KEY
+    if (OPENAI_KEY && fs.existsSync(audioPath)) {
+      try {
+        await setStage('Adding Hooks', 30, 'Transcribing audio')
+        const form = new (global.FormData || require('form-data'))()
+        form.append('file', fs.createReadStream(audioPath))
+        form.append('model', 'whisper-1')
+        const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${OPENAI_KEY}` },
+          body: form
+        })
+        if (!res.ok) throw new Error(`transcription failed: ${res.status}`)
+        const tjson = await res.json()
+        transcriptText = tjson.text || null
+        // whisper may not return segments via this endpoint; if it does, capture
+        transcriptSegments = tjson.segments || null
+        console.log('[worker] transcription length:', transcriptText && transcriptText.length)
+      } catch (e) {
+        console.warn('[worker] transcription error', e && (e.stack || e.message || e))
+      }
+    } else {
+      console.warn('[worker] OPENAI_API_KEY missing or audio not present; skipping transcription')
+    }
+
+    // 3) Ask OpenAI to produce an edit plan JSON
+    await setStage('Adding Hooks', 40, 'Generating AI edit plan')
+    let aiPlan = null
+    const durationSec = await (async () => {
+      try {
+        const v = await new Promise((resolve, reject) => {
+          exec(`ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${localIn}"`, (err, stdout) => err ? reject(err) : resolve(parseFloat(stdout.trim())))
+        })
+        return Number.isFinite(v) ? v : null
+      } catch (e) { return null }
+    })()
+
+    async function callOpenAIEditPlan(transcript, duration) {
+      const model = process.env.OPENAI_MODEL || 'gpt-4'
+      const system = `You are an elite YouTube retention strategist and AI video editor. Produce a STRICT JSON edit plan (no surrounding text) following the schema exactly. Hook must be 3-5s. Remove boring segments 5-10s where possible. Ensure segments are within duration and non-overlapping.`
+      const user = `TRANSCRIPT:\n${transcript || ''}\n\nDURATION:${duration || 'unknown'}\n\nReturn only JSON with keys: hook, keepSegments, removeSegments, notes.`
+      const payload = { model, messages: [ { role: 'system', content: system }, { role: 'user', content: user } ], max_tokens: 1500, temperature: 0.2 }
+      const resp = await fetch('https://api.openai.com/v1/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${OPENAI_KEY}` }, body: JSON.stringify(payload) })
+      if (!resp.ok) throw new Error('OpenAI edit plan request failed: ' + resp.status)
+      const j = await resp.json()
+      const txt = j.choices && j.choices[0] && (j.choices[0].message && j.choices[0].message.content) || j.choices && j.choices[0] && j.choices[0].text
+      if (!txt) throw new Error('No content from OpenAI')
+      // Try to extract JSON substring
+      const m = txt.match(/\{[\s\S]*\}$/m)
+      const jsonStr = m ? m[0] : txt
+      let parsed = null
+      try { parsed = JSON.parse(jsonStr) } catch (e) { throw new Error('Failed to parse JSON from OpenAI: ' + e.message) }
+      return parsed
+    }
+
+    if (OPENAI_KEY && transcriptText) {
+      try {
+        aiPlan = await callOpenAIEditPlan(transcriptText, durationSec)
+        console.log('[worker] AI plan:', JSON.stringify(aiPlan, null, 2))
+      } catch (e) {
+        console.warn('[worker] OpenAI plan failed', e && (e.stack || e.message || e))
+        aiPlan = null
+      }
+    }
+
+    // Validate AI plan (manual schema enforcement)
+    function validatePlan(p, dur) {
+      if (!p || typeof p !== 'object') return false
+      if (!p.hook || typeof p.hook.start !== 'number' || typeof p.hook.end !== 'number') return false
+      const okRange = (s, e) => typeof s === 'number' && typeof e === 'number' && s >= 0 && e > s && (!dur || e <= dur)
+      if (!okRange(p.hook.start, p.hook.end)) return false
+      const segs = Array.isArray(p.keepSegments) ? p.keepSegments : []
+      for (const s of segs) if (!okRange(s.start, s.end)) return false
+      const rems = Array.isArray(p.removeSegments) ? p.removeSegments : []
+      for (const r of rems) if (!okRange(r.start, r.end)) return false
+      // hook length 3-5s
+      const hookLen = p.hook.end - p.hook.start
+      if (hookLen < 3 || hookLen > 5) return false
+      return true
+    }
+
+    let duration = durationSec || stat && stat.duration || null
+
+    if (!validatePlan(aiPlan, duration)) {
+      console.warn('[worker] AI plan invalid or missing; falling back to silence-tighten fallback')
+      // Fallback: detect silences and remove segments >0.6s
+      await setStage('Cutting', 55, 'Detecting silences for fallback trimming')
+      const silCmd = `ffmpeg -i "${localIn}" -af silencedetect=noise=-30dB:d=0.6 -f null -`
+      let silOutput = ''
+      try {
+        await new Promise((resolve, reject) => {
+          const proc = exec(silCmd, { maxBuffer: 1024 * 1024 * 50 }, (err) => err ? reject(err) : resolve())
+          if (proc.stderr) proc.stderr.on('data', (d) => { silOutput += String(d) })
+        })
+      } catch (e) { console.warn('[worker] silence detect failed', e && e.message || e) }
+      const silenceStarts = []
+      const silenceEnds = []
+      for (const line of silOutput.split(/\r?\n/)) {
+        const m1 = line.match(/silence_start:\s*([0-9.]+)/)
+        const m2 = line.match(/silence_end:\s*([0-9.]+)\s*\|\s*silence_duration:\s*([0-9.]+)/)
+        if (m1) silenceStarts.push(parseFloat(m1[1]))
+        if (m2) silenceEnds.push({ end: parseFloat(m2[1]), dur: parseFloat(m2[2]) })
+      }
+      const removeSegments = []
+      // pair starts and ends
+      for (let i = 0; i < Math.min(silenceStarts.length, silenceEnds.length); i++) {
+        const s = silenceStarts[i]
+        const e = silenceEnds[i].end
+        const durSil = silenceEnds[i].dur
+        if (durSil >= 0.6 && durSil <= 30) {
+          // clip to 5-10s preference if possible
+          removeSegments.push({ start: s, end: e, reason: 'silence' })
+        }
+      }
+      // Build keepSegments as complement
+      const keepSegments = []
+      let cursor = 0
+      for (const r of removeSegments) {
+        if (r.start - cursor > 0.05) keepSegments.push({ start: cursor, end: r.start, reason: 'keep' })
+        cursor = r.end
+      }
+      // final tail
+      if (!Number.isFinite(duration)) {
+        // try probe for duration
+        try { const d = await new Promise((resolve, reject) => { exec(`ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${localIn}"`, (err, stdout) => err ? reject(err) : resolve(parseFloat(stdout.trim()))) },  ); if (Number.isFinite(d)) duration = d } catch (e) {}
+      }
+      if (Number.isFinite(duration)) {
+        if (duration - cursor > 0.05) keepSegments.push({ start: cursor, end: duration, reason: 'tail' })
+      } else {
+        // nothing reliable; keep whole
+        keepSegments.push({ start: 0, end: stat.size ? stat.size : 0, reason: 'fallback_whole' })
+      }
+      aiPlan = { hook: { start: 0, end: Math.min(4, keepSegments[0] ? (keepSegments[0].end - keepSegments[0].start) : 4), reason: 'fallback hook' }, keepSegments, removeSegments, notes: { pacing: 'fallback silence-tighten', warnings: [] } }
+      console.log('[worker] fallback aiPlan', JSON.stringify(aiPlan, null, 2))
+    }
+
+    // Build finalSegments: hook first, then keepSegments but remove overlaps with removeSegments
+    await setStage('Cutting', 65, 'Building final segments')
+    const finalSegments = []
+    // push hook
+    if (aiPlan.hook) finalSegments.push({ start: aiPlan.hook.start, end: aiPlan.hook.end, reason: aiPlan.hook.reason || 'hook' })
+    // append keepSegments
+    const ks = Array.isArray(aiPlan.keepSegments) ? aiPlan.keepSegments.slice() : []
+    // ensure ascending and non-overlapping
+    ks.sort((a,b) => a.start - b.start)
+    for (const s of ks) {
+      // skip if fully contained in hook
+      if (s.end <= (aiPlan.hook && aiPlan.hook.end)) continue
+      // adjust start if overlaps hook
+      const start = Math.max(s.start, aiPlan.hook ? aiPlan.hook.end : 0)
+      if (start < s.end) finalSegments.push({ start, end: s.end, reason: s.reason || 'keep' })
+    }
+    // Merge tiny gaps <0.25s
+    const merged = []
+    for (const seg of finalSegments) {
+      if (!merged.length) merged.push(seg)
+      else {
+        const last = merged[merged.length-1]
+        if (seg.start - last.end <= 0.25) {
+          last.end = Math.max(last.end, seg.end)
+        } else merged.push(seg)
+      }
+    }
+    console.log('[worker] finalSegments', JSON.stringify(merged, null, 2))
+
+    if (!merged.length) throw new Error('No segments to render after AI plan/fallback')
+
+    // 4) Render with ffmpeg trim+concat
+    await setStage('Pacing', 80, 'Rendering final video')
+    const localOut = path.resolve(outDir, `${jobId}-output.mp4`)
+    // build filter_complex
+    let filter = ''
+    const inputs = []
+    const parts = merged.map((seg, idx) => {
+      const vs = `[0:v]trim=start=${seg.start}:end=${seg.end},setpts=PTS-STARTPTS[v${idx}];`
+      const as = `[0:a]atrim=start=${seg.start}:end=${seg.end},asetpts=PTS-STARTPTS[a${idx}];`
+      return { vs, as }
+    })
+    filter = parts.map(p => p.vs + p.as).join('')
+    const concatInputs = merged.map((_, idx) => `[v${idx}][a${idx}]`).join('')
+    const concat = `${concatInputs}concat=n=${merged.length}:v=1:a=1[outv][outa]`
+    const fullFilter = filter + concat
+    const ffCmd = `ffmpeg -y -i "${localIn}" -filter_complex "${fullFilter}" -map "[outv]" -map "[outa]" -c:v libx264 -preset veryfast -crf 23 -c:a aac -movflags +faststart "${localOut}"`
+    console.log('[worker] ffmpeg render cmd:', ffCmd)
+    await new Promise((resolve, reject) => {
+      const proc = exec(ffCmd, { maxBuffer: 1024 * 1024 * 200 }, (err, stdout, stderr) => err ? reject(err) : resolve({ stdout, stderr }))
+      if (proc.stdout) proc.stdout.on('data', (d) => console.log(`[worker:${jobId}] ffmpeg: ${String(d).trim()}`))
+      if (proc.stderr) proc.stderr.on('data', (d) => console.log(`[worker:${jobId}] ffmpeg: ${String(d).trim()}`))
+    })
+    console.log(`[worker:${jobId}] render finished, output at ${localOut}`)
 
     // Upload result.json first (small, quick)
     const destResultPath = `results/${jobId}/result.json`
