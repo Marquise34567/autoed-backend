@@ -169,17 +169,24 @@ router.post('/', (req, res) => {
     console.log('[jobs] req.body typeof:', typeof req.body, 'body:', req.body)
 
     const body = req.body || {}
-    const { storagePath, gsUri, downloadURL, path: objectPath, filename, contentType } = body
+    const { storagePath, gsUri: incomingGsUri, downloadURL, path: objectPath } = body
 
-    // Validate and echo what was received for clearer errors
-    const receivedPath = storagePath || gsUri || objectPath || downloadURL || null
-    if (!receivedPath || !filename || !contentType) {
-      return res.status(400).json({ ok: false, error: 'Missing required fields: storagePath|gsUri|downloadURL, filename, contentType', received: { storagePath, gsUri, downloadURL, filename, contentType } })
+    // Accept any one of: storagePath OR gsUri OR downloadURL
+    const receivedPath = storagePath || incomingGsUri || objectPath || downloadURL || null
+    if (!receivedPath) {
+      return res.status(400).json({ ok: false, error: 'Missing required fields: storagePath|gsUri|downloadURL', received: { storagePath, gsUri: incomingGsUri, downloadURL } })
     }
 
     const jobId = (crypto.randomUUID && crypto.randomUUID()) || `${Date.now()}-${Math.floor(Math.random() * 100000)}`
-    const canonicalPath = storagePath || gsUri || objectPath || null
-    const job = makeJob({ id: jobId, path: canonicalPath, filename, contentType })
+    // Normalize to a canonical gs:// URI when possible
+    let canonicalPath = incomingGsUri || null
+    if (!canonicalPath && storagePath) {
+      const bn = admin.getBucketName && admin.getBucketName()
+      if (bn) canonicalPath = `gs://${bn}/${storagePath}`
+      else canonicalPath = storagePath
+    }
+    if (!canonicalPath && objectPath) canonicalPath = objectPath
+    const job = makeJob({ id: jobId, path: canonicalPath })
     jobs.set(jobId, job)
     console.log(`[jobs] created ${jobId} path=${objectPath}`)
 
@@ -197,8 +204,6 @@ router.post('/', (req, res) => {
           createdAt: now,
           updatedAt: now,
           objectPathOriginal: canonicalPath,
-          filename: filename,
-          contentType: contentType,
           logs: [`Job created via Express POST`],
         }, { merge: true })
       } catch (e) {
@@ -207,6 +212,8 @@ router.post('/', (req, res) => {
     })()
 
     // Schedule processing without blocking response
+    // Prepare inputSpec for background processing. Prefer a canonical gsUri when available.
+    const gsUri = incomingGsUri || (storagePath && (admin.getBucketName ? `gs://${admin.getBucketName()}/${storagePath}` : null)) || undefined
     job.inputSpec = { storagePath: storagePath || undefined, gsUri: gsUri || undefined, downloadURL: downloadURL || undefined }
     setImmediate(() => {
       processVideo(jobId, job.inputSpec).catch((e) => {
