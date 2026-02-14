@@ -4,6 +4,7 @@ const os = require('os')
 const https = require('https')
 const http = require('http')
 const admin = require('../../utils/firebaseAdmin')
+const { getSignedUrlForPath } = require('../../utils/storageSignedUrl')
 
 const db = admin.db || (admin.firestore && admin.firestore())
 
@@ -77,9 +78,9 @@ async function downloadFromGs(gsUriOrPath, dest) {
 async function uploadToBucket(localPath, destPath) {
   const bucket = admin.getBucket()
   await bucket.upload(localPath, { destination: destPath })
-  const bucketName = admin.getBucketName()
-  const publicUrl = `https://storage.googleapis.com/${bucketName}/${destPath}`
-  return publicUrl
+  // return a time-limited signed URL instead of a public storage URL
+  const signed = await getSignedUrlForPath(destPath, 30)
+  return signed
 }
 
 async function processJob(jobId, inputSpec) {
@@ -196,9 +197,9 @@ async function processJob(jobId, inputSpec) {
     console.log(`JOB DONE ${jobId} uploading result to ${destPath}`)
     const resultUrl = await uploadToBucket(localResult, destPath)
 
-    // Update job doc
+    // Update job doc (do not log signed URL)
     await db.collection('jobs').doc(jobId).set({ status: 'done', progress: 100, resultUrl, updatedAt: Date.now(), message: 'Completed' }, { merge: true })
-    console.log(`[worker:${jobId}] completed, resultUrl=${resultUrl}`)
+    console.log(`[worker:${jobId}] completed, resultPath=${destPath}`)
     console.log(`JOB DONE ${jobId}`)
 
     // cleanup

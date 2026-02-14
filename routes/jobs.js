@@ -5,6 +5,7 @@ const fs = require('fs')
 const path = require('path')
 const { exec } = require('child_process')
 const admin = require('../utils/firebaseAdmin')
+const { getSignedUrlForPath, attachSignedUrlsToJob } = require('../utils/storageSignedUrl')
 const { processJob } = require('../services/worker/processJob')
 const { enqueue, reenqueue, listQueued } = require('../services/worker/queue')
 const db = admin.db
@@ -114,10 +115,16 @@ async function processVideo(jobId, inputSpec) {
     console.log(`[jobs:${jobId}] Uploading result to ${finalPath}`)
     await bucket.upload(localOut, { destination: finalPath })
     console.log('Upload finished')
-    const bucketName = admin.getBucketName()
-    const resultUrl = `https://storage.googleapis.com/${bucketName}/${finalPath}`
+    // Generate a time-limited signed URL for clients instead of a public URL
+    let resultUrl = null
+    try {
+      resultUrl = await getSignedUrlForPath(finalPath, 30)
+    } catch (e) {
+      // fall back to storing path if signed URL generation fails
+      resultUrl = null
+    }
     await db.collection('jobs').doc(jobId).set({ status: 'completed', progress: 100, resultUrl, finalVideoPath: finalPath, message: 'Completed', updatedAt: Date.now() }, { merge: true })
-    console.log(`Processing completed: ${jobId} resultUrl=${resultUrl}`)
+    console.log(`Processing completed: ${jobId} resultPath=${finalPath}`)
 
     // cleanup
     try { fs.unlinkSync(localIn) } catch (e) {}
@@ -151,20 +158,27 @@ router.get('/', async (req, res) => {
     if (qid) {
       if (db) {
         const snap = await db.collection('jobs').doc(qid).get()
-        if (snap && snap.exists) return res.status(200).json({ ok: true, job: snap.data() })
+        if (snap && snap.exists) {
+          let job = snap.data()
+          try { job = await attachSignedUrlsToJob(job, 30) } catch (e) {}
+          return res.status(200).json({ ok: true, job })
+        }
       }
-      const job = jobs.get(qid) || null
+      let job = jobs.get(qid) || null
+      try { job = await attachSignedUrlsToJob(job, 30) } catch (e) {}
       return res.status(200).json({ ok: true, job })
     }
 
     // list all — prefer Firestore collection if available
     if (db) {
       const snaps = await db.collection('jobs').orderBy('createdAt', 'desc').limit(100).get()
-      const arr = []
+      let arr = []
       snaps.forEach(s => arr.push(s.data()))
+      try { arr = await Promise.all(arr.map(j => attachSignedUrlsToJob(j, 30))) } catch (e) {}
       return res.status(200).json({ ok: true, jobs: arr, queued: listQueued() })
     }
-    const arr = Array.from(jobs.values())
+    let arr = Array.from(jobs.values())
+    try { arr = await Promise.all(arr.map(j => attachSignedUrlsToJob(j, 30))) } catch (e) {}
     return res.status(200).json({ ok: true, jobs: arr, queued: listQueued() })
   } catch (e) {
     console.error('[jobs] GET error', e)
@@ -179,9 +193,14 @@ router.get('/:id', async (req, res) => {
   try {
     if (db) {
       const snap = await db.collection('jobs').doc(id).get()
-      if (snap && snap.exists) return res.status(200).json({ ok: true, job: snap.data() })
+      if (snap && snap.exists) {
+        let job = snap.data()
+        try { job = await attachSignedUrlsToJob(job, 30) } catch (e) {}
+        return res.status(200).json({ ok: true, job })
+      }
     }
-    const job = jobs.get(id) || null
+    let job = jobs.get(id) || null
+    try { job = await attachSignedUrlsToJob(job, 30) } catch (e) {}
     return res.status(200).json({ ok: true, job })
   } catch (e) {
     console.error('[jobs] GET /:id error', e)
