@@ -68,7 +68,78 @@ export async function getJob(id: string): Promise<JobRecord | null> {
       // ignore cleanup failures
     }
   }
-  return job
+  // Attach signed URLs for client consumption (do not persist)
+  try {
+    const withUrls = await attachSignedUrlsToJob(job, 30)
+    return withUrls
+  } catch (e) {
+    return job
+  }
+}
+
+async function attachSignedUrlsToJob(job: JobRecord, expiresMinutes = 30): Promise<JobRecord> {
+  if (!job) return job
+  const cloned: JobRecord = { ...job }
+  try {
+    const bucket = admin.storage().bucket()
+    // final video path -> videoUrl
+    if (cloned.finalVideoPath) {
+      try {
+        const f = bucket.file(cloned.finalVideoPath)
+        const [exists] = await f.exists()
+        if (exists) {
+          const expires = new Date(Date.now() + (expiresMinutes || 30) * 60 * 1000)
+          const [url] = await f.getSignedUrl({ version: 'v4', action: 'read', expires })
+          ;(cloned as any).videoUrl = url
+        }
+      } catch (_) {}
+    }
+
+    // result.json guess
+    try {
+      const guess = `results/${cloned.id}/result.json`
+      const f2 = bucket.file(guess)
+      const [exists2] = await f2.exists()
+      if (exists2) {
+        const expires = new Date(Date.now() + (expiresMinutes || 30) * 60 * 1000)
+        const [url2] = await f2.getSignedUrl({ version: 'v4', action: 'read', expires })
+        ;(cloned as any).resultUrl = url2
+      }
+    } catch (_) {}
+
+    // resultUrls map
+    if ((cloned as any).resultUrls && typeof (cloned as any).resultUrls === 'object') {
+      const out: Record<string, any> = {}
+      for (const k of Object.keys((cloned as any).resultUrls)) {
+        const v = (cloned as any).resultUrls[k]
+        if (typeof v === 'string') {
+          try {
+            let path = null as string | null
+            if (v.startsWith('results/') || v.startsWith('outputs/') || v.startsWith('uploads/')) path = v
+            else if (v.includes('storage.googleapis.com')) {
+              const m = v.match(/^https?:\/\/storage.googleapis.com\/(?:[^\/]+)\/(.+)$/i)
+              if (m) path = m[1]
+            }
+            if (path) {
+              const f3 = bucket.file(path)
+              const [exists3] = await f3.exists()
+              if (exists3) {
+                const expires = new Date(Date.now() + (expiresMinutes || 30) * 60 * 1000)
+                const [u] = await f3.getSignedUrl({ version: 'v4', action: 'read', expires })
+                out[k] = u
+                continue
+              }
+            }
+          } catch (_) {}
+        }
+        out[k] = v
+      }
+      ;(cloned as any).resultUrls = out
+    }
+  } catch (e) {
+    // ignore failures
+  }
+  return cloned
 }
 
 export async function updateJob(id: string, patch: Partial<JobRecord>) {
