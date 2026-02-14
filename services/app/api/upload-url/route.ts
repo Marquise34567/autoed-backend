@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import admin, { adminAuth, adminBucket, getBucket } from '@/lib/firebaseAdmin'
+import admin, { adminAuth, adminBucket, getBucket, getBucketName } from '@/lib/firebaseAdmin'
 import path from 'path'
 import { cookies } from 'next/headers'
 import { randomUUID } from 'crypto'
@@ -7,7 +7,7 @@ import { randomUUID } from 'crypto'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-const BUCKET_NAME = process.env.FIREBASE_STORAGE_BUCKET || 'videos'
+const BUCKET_NAME = getBucketName() || 'videos'
 const MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024 // 2GB
 const SIGNED_URL_EXPIRES_IN = 3600 // 1 hour in seconds
 
@@ -17,7 +17,6 @@ const SIGNED_URL_EXPIRES_IN = 3600 // 1 hour in seconds
 function getMissingEnvVars(): string[] {
   const missing: string[] = []
   if (!process.env.FIREBASE_SERVICE_ACCOUNT && !(process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_CLIENT_EMAIL && process.env.FIREBASE_PRIVATE_KEY)) missing.push('FIREBASE_SERVICE_ACCOUNT or FIREBASE_* vars')
-  if (!process.env.FIREBASE_STORAGE_BUCKET) missing.push('FIREBASE_STORAGE_BUCKET')
   return missing
 }
 
@@ -27,10 +26,7 @@ export async function POST(request: Request) {
 
   try {
     console.log(`${logPrefix} POST /api/upload-url started`)
-    // Step 1: Check environment variables
-    if (!process.env.FIREBASE_STORAGE_BUCKET) {
-      return NextResponse.json({ ok: false, error: 'FIREBASE_STORAGE_BUCKET missing' }, { status: 500 })
-    }
+    // Step 1: Check environment variables (credentials only)
     const missingEnv = getMissingEnvVars()
     if (missingEnv.length > 0) {
       console.error(`${logPrefix} Missing env vars:`, missingEnv)
@@ -136,8 +132,9 @@ export async function POST(request: Request) {
     // Step 4: Create admin client
     // Step 5: Ensure bucket exists (Firebase Storage)
     console.log(`${logPrefix} Checking Firebase storage bucket '${BUCKET_NAME}'...`)
-      const bucket = getBucket(BUCKET_NAME)
+    let bucket
     try {
+      bucket = getBucket(BUCKET_NAME)
       const [exists] = await bucket.exists()
       if (!exists) {
         console.error(`${logPrefix} Bucket does not exist: ${BUCKET_NAME}`)
@@ -155,16 +152,7 @@ export async function POST(request: Request) {
       console.log(logPrefix + " \u2713 Bucket exists")
     } catch (e: any) {
       console.error(logPrefix + " Error checking bucket:", e?.message ?? e)
-      return NextResponse.json(
-        {
-          error: 'Bucket check failed',
-          details: e?.message || String(e),
-          missingEnv: [],
-          bucketExists: null,
-            projectId: process.env.FIREBASE_PROJECT_ID || null,
-        },
-        { status: 500 }
-      )
+      return NextResponse.json({ ok: false, error: 'FIREBASE_STORAGE_BUCKET missing' }, { status: 500 })
     }
 
     // Step 6: Generate canonical storage path (uploads/{uid}/{jobId}/original.<ext>)

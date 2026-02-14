@@ -51,8 +51,15 @@ export async function POST(request: Request) {
         appendJobLog(jobId, 'Starting normalization pipeline');
 
         // Download file from Firebase Storage
-        const bucket = getBucket();
-        const remoteFile = bucket.file(storagePath);
+        let bucket
+        try {
+          bucket = getBucket()
+        } catch (e: any) {
+          await updateJob(jobId, { phase: 'ERROR', message: 'Storage not configured', error: 'FIREBASE_STORAGE_BUCKET missing' });
+          appendJobLog(jobId, 'Storage bucket missing; aborting')
+          return
+        }
+        const remoteFile = bucket.file(storagePath)
         const [exists] = await remoteFile.exists();
         if (!exists) {
             await updateJob(jobId, { phase: 'ERROR', message: 'Source file not found', error: 'Source file missing' });
@@ -86,6 +93,9 @@ export async function POST(request: Request) {
         const destFile = bucket.file(destPath);
         await destFile.save(fs.readFileSync(normalizedLocal), { resumable: false, contentType: 'video/mp4' });
         appendJobLog(jobId, `Uploaded normalized input to ${destPath}`);
+        // Remove local temp normalized file to avoid relying on local disk for long-term storage
+        try { fs.unlinkSync(normalizedLocal) } catch (e) { /* ignore */ }
+        try { fs.unlinkSync(tmpInput) } catch (e) { /* ignore */ }
         await updateJob(jobId, { overallProgress: 0.3, overallEtaSec: 50, message: 'Starting analysis', objectPathNormalized: destPath });
 
         // Perform local analysis using ffprobe/ffmpeg (no network fetches)
@@ -141,6 +151,9 @@ export async function POST(request: Request) {
           // Persist only the storage path (no signed URLs)
           await updateJob(jobId, { phase: 'DONE', overallProgress: 1, overallEtaSec: 0, message: 'Complete', finalVideoPath: finalPath });
           appendJobLog(jobId, `Render uploaded: ${finalPath}`);
+          // Cleanup local render file
+          try { fs.unlinkSync(renderLocal) } catch (e) { /* ignore */ }
+          try { fs.unlinkSync(normalizedLocal) } catch (e) { /* ignore */ }
         } catch (e: any) {
           appendJobLog(jobId, `Analysis/render exception: ${e?.message || String(e)}`);
           await updateJob(jobId, { phase: 'ERROR', message: 'Analysis/render failed', error: e?.message || String(e) });

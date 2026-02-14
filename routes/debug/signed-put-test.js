@@ -31,8 +31,8 @@ router.post('/signed-put-test', async (req, res) => {
   if (!filename || !contentType) return res.status(400).json({ error: 'Missing filename or contentType' })
   if (!admin || !admin.storage) return res.status(500).json({ error: 'Firebase admin not configured' })
   try {
-    const bucketName = process.env.FIREBASE_STORAGE_BUCKET || undefined
-    const bucket = bucketName ? admin.storage().bucket(bucketName) : admin.storage().bucket()
+    const bucketName = (admin.getBucketName && admin.getBucketName()) || undefined
+    const bucket = admin.getBucket ? admin.getBucket(bucketName) : (bucketName ? admin.storage().bucket(bucketName) : admin.storage().bucket())
     const safeFilename = String(filename).replace(/[^a-zA-Z0-9._-]/g, '_')
     const destPath = `uploads/test-${Date.now()}-${safeFilename}`
     const file = bucket.file(destPath)

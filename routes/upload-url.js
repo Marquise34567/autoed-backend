@@ -35,8 +35,8 @@ router.post('/', async (req, res) => {
     }
 
     try {
-      const bucketName = process.env.FIREBASE_STORAGE_BUCKET || undefined
-      const bucket = bucketName ? admin.storage().bucket(bucketName) : admin.storage().bucket()
+      const bucketName = (admin.getBucketName && admin.getBucketName()) || undefined
+      const bucket = admin.getBucket ? admin.getBucket(bucketName) : (bucketName ? admin.storage().bucket(bucketName) : admin.storage().bucket())
 
       // generate unique, safe path
       const safeFilename = String(filename).replace(/[^a-zA-Z0-9._-]/g, '_')
