@@ -32,7 +32,7 @@ export async function GET(
     errorMessage: (job as any).error || null,
     createdAt: (job as any).createdAt || null,
     updatedAt: (job as any).updatedAt || null,
-    resultUrls: (job as any).resultUrls || (job as any).finalVideoPath ? { final: (job as any).finalVideoPath } : null,
+    resultUrls: (job as any).resultUrls || (job as any).resultUrl ? (job as any).resultUrls || { final: (job as any).resultUrl } : (job as any).videoUrl ? { final: (job as any).videoUrl } : (job as any).finalVideoPath ? { final: (job as any).finalVideoPath } : null,
     logs: (job as any).logs || [],
   };
 
