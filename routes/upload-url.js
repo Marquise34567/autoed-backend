@@ -22,13 +22,13 @@ try {
 router.post('/', async (req, res) => {
   const requestId = Date.now() + ':' + Math.floor(Math.random() * 10000)
   try {
-    const { fileName, contentType, filename, mime } = req.body || {}
+    const { fileName, contentType, filename, mime, enforceContentType } = req.body || {}
     // support both fileName and filename param names
     const finalName = fileName || filename
-    console.log(`[upload-url:${requestId}] request body:`, { fileName: finalName, contentType })
+    console.log(`[upload-url:${requestId}] request body:`, { fileName: finalName, contentType, enforceContentType })
 
-    if (!finalName || !contentType) {
-      return res.status(400).json({ error: 'Missing fileName or contentType' })
+    if (!finalName) {
+      return res.status(400).json({ error: 'Missing fileName' })
     }
 
     const bucketName = process.env.FIREBASE_STORAGE_BUCKET
@@ -50,13 +50,12 @@ router.post('/', async (req, res) => {
     const file = bucket.file(destPath)
     const expiresAt = new Date(Date.now() + 15 * 60 * 1000) // 15 minutes
 
-    // Sign the URL and bind Content-Type so the browser PUT must match
-    const [uploadUrl] = await file.getSignedUrl({
-      version: 'v4',
-      action: 'write',
-      expires: expiresAt,
-      contentType: contentType,
-    })
+    // Sign the URL. Do NOT bind Content-Type by default to avoid SignatureDoesNotMatch
+    // If client explicitly requests enforcement via `enforceContentType` and provides
+    // an exact `contentType`, include it in the signed URL options.
+    const signOpts = { version: 'v4', action: 'write', expires: expiresAt }
+    if (enforceContentType && contentType) signOpts.contentType = contentType
+    const [uploadUrl] = await file.getSignedUrl(signOpts)
 
     console.log(`[upload-url:${requestId}] signedUrl generated:`, !!uploadUrl, { path: destPath, bucket: bucket.name })
     return res.status(200).json({ uploadUrl, filePath: destPath })

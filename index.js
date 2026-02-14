@@ -352,9 +352,9 @@ app.get('/api/jobs', (req, res) => {
 app.post('/api/upload-url', (req, res) => {
   ;(async () => {
     try {
-      const { fileName, contentType, filename } = req.body || {}
+      const { fileName, contentType, filename, enforceContentType } = req.body || {}
       const finalName = fileName || filename
-      if (!finalName || !contentType) return res.status(400).json({ ok: false, error: 'Missing fileName or contentType' })
+      if (!finalName) return res.status(400).json({ ok: false, error: 'Missing fileName' })
 
       let adminFallback = null
       try {
@@ -376,8 +376,10 @@ app.post('/api/upload-url', (req, res) => {
         const file = bucket.file(destPath)
         const expiresAt = new Date(Date.now() + 15 * 60 * 1000)
 
-        // Sign and bind Content-Type so browser PUT must match
-        const [signedUrl] = await file.getSignedUrl({ version: 'v4', action: 'write', expires: expiresAt, contentType })
+        // Sign URL without binding Content-Type by default to avoid SignatureDoesNotMatch
+        const signOpts = { version: 'v4', action: 'write', expires: expiresAt }
+        if (enforceContentType && contentType) signOpts.contentType = contentType
+        const [signedUrl] = await file.getSignedUrl(signOpts)
         console.log('[upload-url fallback] signedUrl generated:', !!signedUrl, { path: destPath, bucket: bucket.name })
         if (!signedUrl || typeof signedUrl !== 'string') {
           console.error('[upload-url fallback] signedUrl is invalid', { path: destPath, bucket: bucket.name })

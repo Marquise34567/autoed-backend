@@ -10,7 +10,7 @@ function Uploader(){
     if (!file) return setStatus('select a file')
     setStatus('requesting signed url')
     try {
-      const body = { filename: file.name, contentType: file.type || 'application/octet-stream' }
+      const body = { filename: file.name }
       // Prefer explicit API base env var; default to local dev or Railway production
       const backendBase = process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8080'
       if (!process.env.NEXT_PUBLIC_API_BASE_URL) {
@@ -22,12 +22,10 @@ function Uploader(){
       if (!json.uploadUrl) throw new Error('No uploadUrl in response')
 
       setStatus('uploading')
-      // Set Content-Type header to match the signed URL's contentType
+      // Do NOT set Content-Type header manually — let the browser set it.
       const putResp = await fetch(json.uploadUrl, {
         method: 'PUT',
-        headers: { 'Content-Type': file.type || 'application/octet-stream' },
         body: file,
-        credentials: 'omit',
       })
       if (!putResp.ok) {
         const text = await putResp.text()
