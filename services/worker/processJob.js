@@ -56,6 +56,7 @@ async function uploadToBucket(localPath, destPath) {
 }
 
 async function processJob(jobId, inputSpec) {
+  console.log(`JOB START ${jobId}`)
   console.log(`[worker:${jobId}] processJob starting`, { inputSpec: !!inputSpec })
   try {
     if (!db) throw new Error('Firestore db not initialized')
@@ -81,6 +82,7 @@ async function processJob(jobId, inputSpec) {
     const localIn = path.resolve(tmpDir, `${jobId}-${base}`)
 
     // Fetch input
+    console.log(`DOWNLOADING INPUT ${jobId}`)
     if (downloadURL) {
       console.log(`[worker:${jobId}] downloading from URL: ${downloadURL}`)
       await db.collection('jobs').doc(jobId).set({ progress: 5, message: 'Downloading from URL', updatedAt: Date.now() }, { merge: true })
@@ -96,7 +98,8 @@ async function processJob(jobId, inputSpec) {
       throw new Error('No input source provided')
     }
 
-    // Simple processing stub: read file size and write result.json
+    // Processing step
+    console.log(`PROCESSING ${jobId}`)
     console.log(`[worker:${jobId}] running pipeline stub on ${localIn}`)
     const stat = fs.statSync(localIn)
     const result = {
@@ -112,24 +115,26 @@ async function processJob(jobId, inputSpec) {
 
     // Upload result
     const destPath = `results/${jobId}/result.json`
-    console.log(`[worker:${jobId}] uploading result to ${destPath}`)
+    console.log(`JOB DONE ${jobId} uploading result to ${destPath}`)
     const resultUrl = await uploadToBucket(localResult, destPath)
 
     // Update job doc
     await db.collection('jobs').doc(jobId).set({ status: 'done', progress: 100, resultUrl, updatedAt: Date.now(), message: 'Completed' }, { merge: true })
     console.log(`[worker:${jobId}] completed, resultUrl=${resultUrl}`)
+    console.log(`JOB DONE ${jobId}`)
 
     // cleanup
     try { fs.unlinkSync(localIn) } catch (e) {}
     try { fs.unlinkSync(localResult) } catch (e) {}
 
   } catch (err) {
-    console.error(`[worker:${jobId}] processing error`, err && (err.stack || err.message || err))
+    console.error(`JOB ERROR ${jobId}`, err && (err.stack || err.message || err))
     try {
       if (db) await db.collection('jobs').doc(jobId).set({ status: 'error', progress: 0, error: err && (err.message || String(err)), updatedAt: Date.now(), message: 'Processing error' }, { merge: true })
     } catch (e) {
       console.error(`[worker:${jobId}] failed to write error to Firestore`, e)
     }
+    console.log(`JOB ERROR ${jobId}`)
   }
 }
 

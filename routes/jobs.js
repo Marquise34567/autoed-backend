@@ -203,7 +203,7 @@ router.post('/', (req, res) => {
     if (!canonicalPath && objectPath) canonicalPath = objectPath
     const job = makeJob({ id: jobId, path: canonicalPath })
     jobs.set(jobId, job)
-    console.log(`[jobs] created ${jobId} path=${objectPath}`)
+    console.log(`JOB CREATED ${jobId} path=${objectPath}`)
 
     // Persist a Firestore job document so other clients can observe progress
     ;(async () => {
@@ -231,13 +231,14 @@ router.post('/', (req, res) => {
     const gsUri = incomingGsUri || (storagePath && (admin.getBucketName ? `gs://${admin.getBucketName()}/${storagePath}` : null)) || undefined
     job.inputSpec = { storagePath: storagePath || undefined, gsUri: gsUri || undefined, downloadURL: downloadURL || undefined }
     setImmediate(() => {
+      console.log(`JOB START ${jobId}`)
       processJob(jobId, job.inputSpec).catch((e) => {
-        console.error(`[jobs:${jobId}] processJob uncaught error:`, e)
-        try { db.collection('jobs').doc(jobId).set({ status: 'failed', error: e && (e.message || String(e)), updatedAt: Date.now() }, { merge: true }) } catch (_) {}
+        console.error(`JOB ERROR ${jobId}`, e)
+        try { db.collection('jobs').doc(jobId).set({ status: 'error', error: e && (e.message || String(e)), updatedAt: Date.now() }, { merge: true }) } catch (_) {}
       })
     })
 
-    return res.status(200).json(job)
+    return res.status(200).json({ ok: true, jobId })
   } catch (err) {
     console.error('[jobs] POST error', err && err.message ? err.message : err)
     return res.status(500).json({ ok: false, error: err && err.message ? err.message : 'Internal error' })
