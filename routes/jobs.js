@@ -144,85 +144,72 @@ function makeJob({ id, path = null, filename = null, contentType = null }) {
   }
 }
 
-// List jobs
-router.get('/', (req, res) => {
-  const arr = Array.from(jobs.values())
-  return res.status(200).json({ ok: true, jobs: arr })
-})
-
 // Get single job by id or list all
-router.get('/', (req, res) => {
-  ;(async () => {
-    try {
-      const qid = req.query.id || null
-      if (qid) {
-        if (db) {
-          const snap = await db.collection('jobs').doc(qid).get()
-          if (snap && snap.exists) return res.status(200).json({ ok: true, job: snap.data() })
-        }
-        const job = jobs.get(qid) || null
-        return res.status(200).json({ ok: true, jobId, received: { storagePath, downloadURL, filename: body.filename, contentType: body.contentType } })
-      }
-
-      // list all — prefer Firestore collection if available
+router.get('/', async (req, res) => {
+  try {
+    const qid = req.query.id || null
+    if (qid) {
       if (db) {
-        const snaps = await db.collection('jobs').orderBy('createdAt', 'desc').limit(100).get()
-
-    // Retry endpoint to re-enqueue a job
-    router.post('/:id/retry', (req, res) => {
-      const id = req.params.id
-      if (!id) return res.status(400).json({ ok: false, error: 'Missing id' })
-      ;(async () => {
-        try {
-          // fetch inputSpec from Firestore
-          if (!db) return res.status(500).json({ ok: false, error: 'Firestore not available' })
-          const snap = await db.collection('jobs').doc(id).get()
-          if (!snap.exists) return res.status(404).json({ ok: false, error: 'Job not found' })
-          const data = snap.data()
-          await db.collection('jobs').doc(id).set({ status: 'queued', progress: 0, message: 'Re-queued', updatedAt: Date.now() }, { merge: true })
-          reenqueue(id, data.inputSpec || {})
-          console.log('Re-enqueued', id)
-          return res.status(200).json({ ok: true, jobId: id })
-        } catch (e) {
-          console.error('[jobs] retry error', e)
-          return res.status(500).json({ ok: false, error: e && e.message ? e.message : String(e) })
-        }
-      })()
-    })
-        const arr = []
-        snaps.forEach(s => arr.push(s.data()))
-        return res.status(200).json({ ok: true, jobs: arr, queued: listQueued() })
+        const snap = await db.collection('jobs').doc(qid).get()
+        if (snap && snap.exists) return res.status(200).json({ ok: true, job: snap.data() })
       }
-      const arr = Array.from(jobs.values())
-      return res.status(200).json({ ok: true, jobs: arr, queued: listQueued() })
-    } catch (e) {
-      console.error('[jobs] GET error', e)
-      return res.status(500).json({ ok: false, error: e && e.message ? e.message : String(e) })
+      const job = jobs.get(qid) || null
+      return res.status(200).json({ ok: true, job })
     }
-  })()
+
+    // list all — prefer Firestore collection if available
+    if (db) {
+      const snaps = await db.collection('jobs').orderBy('createdAt', 'desc').limit(100).get()
+      const arr = []
+      snaps.forEach(s => arr.push(s.data()))
+      return res.status(200).json({ ok: true, jobs: arr, queued: listQueued() })
+    }
+    const arr = Array.from(jobs.values())
+    return res.status(200).json({ ok: true, jobs: arr, queued: listQueued() })
+  } catch (e) {
+    console.error('[jobs] GET error', e)
+    return res.status(500).json({ ok: false, error: e && e.message ? e.message : String(e) })
+  }
 })
 
 // Get single job by id path for backward compatibility
-router.get('/:id', (req, res) => {
+router.get('/:id', async (req, res) => {
   const id = req.params.id
   if (!id) return res.status(400).json({ ok: false, error: 'Missing id' })
-  ;(async () => {
-    try {
-      if (db) {
-        const snap = await db.collection('jobs').doc(id).get()
-        if (snap && snap.exists) return res.status(200).json({ ok: true, job: snap.data() })
-      }
-      const job = jobs.get(id) || null
-      return res.status(200).json({ ok: true, job })
-    } catch (e) {
-      console.error('[jobs] GET /:id error', e)
-      return res.status(500).json({ ok: false, error: e && e.message ? e.message : String(e) })
+  try {
+    if (db) {
+      const snap = await db.collection('jobs').doc(id).get()
+      if (snap && snap.exists) return res.status(200).json({ ok: true, job: snap.data() })
     }
-  })()
+    const job = jobs.get(id) || null
+    return res.status(200).json({ ok: true, job })
+  } catch (e) {
+    console.error('[jobs] GET /:id error', e)
+    return res.status(500).json({ ok: false, error: e && e.message ? e.message : String(e) })
+  }
+})
+
+// Retry endpoint to re-enqueue a job
+router.post('/:id/retry', async (req, res) => {
+  const id = req.params.id
+  if (!id) return res.status(400).json({ ok: false, error: 'Missing id' })
+  try {
+    if (!db) return res.status(500).json({ ok: false, error: 'Firestore not available' })
+    const snap = await db.collection('jobs').doc(id).get()
+    if (!snap.exists) return res.status(404).json({ ok: false, error: 'Job not found' })
+    const data = snap.data()
+    await db.collection('jobs').doc(id).set({ status: 'queued', progress: 0, message: 'Re-queued', updatedAt: Date.now() }, { merge: true })
+    reenqueue(id, data.inputSpec || {})
+    console.log('Re-enqueued', id)
+    return res.status(200).json({ ok: true, jobId: id })
+  } catch (e) {
+    console.error('[jobs] retry error', e)
+    return res.status(500).json({ ok: false, error: e && e.message ? e.message : String(e) })
+  }
 })
 
 // Create a job
-router.post('/', (req, res) => {
+router.post('/', async (req, res) => {
   try {
     // Debug logging to help verify incoming requests (one-time per deploy is fine)
     console.log('[jobs] req.headers content-type:', req.headers['content-type'])
@@ -253,13 +240,18 @@ router.post('/', (req, res) => {
     // Persist a Firestore job document so other clients can observe progress
     try {
       const now = new Date().getTime()
-      const inputSpec = {
-        storagePath: storagePath || undefined,
-        gsUri: incomingGsUri || (storagePath && (admin.getBucketName ? `gs://${admin.getBucketName()}/${storagePath}` : null)) || undefined,
-        downloadURL: downloadURL || undefined,
-        filename: body.filename || undefined,
-        contentType: body.contentType || undefined,
-      }
+      // Build inputSpec without undefined values to satisfy Firestore
+      const inputSpec = {}
+      if (storagePath) inputSpec.storagePath = storagePath
+      const computedGs = incomingGsUri || (storagePath && (admin.getBucketName ? `gs://${admin.getBucketName()}/${storagePath}` : null)) || null
+      if (computedGs) inputSpec.gsUri = computedGs
+      if (downloadURL) inputSpec.downloadURL = downloadURL
+      if (body.filename) inputSpec.filename = body.filename
+      if (body.contentType) inputSpec.contentType = body.contentType
+
+      // attach to in-memory job so queue has the spec even if Firestore write fails
+      job.inputSpec = inputSpec
+
       await db.collection('jobs').doc(jobId).set({
         id: jobId,
         uid: null,
@@ -273,9 +265,6 @@ router.post('/', (req, res) => {
         objectPathOriginal: canonicalPath,
         logs: [`Job created via Express POST`],
       }, { merge: true })
-
-      // attach to in-memory job as well
-      job.inputSpec = inputSpec
     } catch (e) {
       console.error('[jobs] failed to persist job to Firestore', e)
     }
