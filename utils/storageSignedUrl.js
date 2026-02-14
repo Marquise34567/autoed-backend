@@ -72,6 +72,14 @@ async function attachSignedUrlsToJob(job, expiresMinutes = 30) {
       } catch (e) {}
     }
 
+    // If this job has a final video, prefer that as the canonical result URL
+    if (cloned.finalVideoPath && cloned.videoUrl) {
+      // Only override resultUrl when it's missing or points to a results JSON
+      if (!cloned.resultUrl || (typeof cloned.resultUrl === 'string' && cloned.resultUrl.includes('/results/'))) {
+        cloned.resultUrl = cloned.videoUrl
+      }
+    }
+
     // resultUrls map (older route may store multiple)
     if (cloned.resultUrls && typeof cloned.resultUrls === 'object') {
       const out = Object.assign({}, cloned.resultUrls)
