@@ -208,6 +208,66 @@ router.get('/:id', async (req, res) => {
   }
 })
 
+// Download processed MP4 for a job. Serves local `renders/<jobId>.mp4` when present,
+// otherwise streams the file from the configured storage bucket using the
+// job's `finalVideoPath` (or the guessed `outputs/<jobId>/final.mp4`). This
+// endpoint is safe for production: it streams from disk or GCS and returns
+// `Content-Disposition: attachment` so browsers download the MP4.
+router.get('/:id/download', async (req, res) => {
+  const id = req.params.id
+  if (!id) return res.status(400).json({ ok: false, error: 'Missing id' })
+  try {
+    const localPath = require('path').resolve(process.cwd(), 'renders', `${id}.mp4`)
+    const fs = require('fs')
+
+    // Prefer a local render path for fast local dev/testing
+    if (fs.existsSync(localPath)) {
+      return res.download(localPath, `${id}.mp4`)
+    }
+
+    // Otherwise, try to stream from GCS using the job record's finalVideoPath
+    let finalPath = null
+    if (db) {
+      const snap = await db.collection('jobs').doc(id).get()
+      if (snap && snap.exists) {
+        const job = snap.data()
+        finalPath = job && (job.finalVideoPath || job.finalPath || null)
+      }
+    }
+
+    // Fallback guess if job record has no path
+    if (!finalPath) finalPath = `outputs/${id}/final.mp4`
+
+    const bucket = admin.getBucket()
+    const file = bucket.file(finalPath)
+    const [exists] = await file.exists()
+    if (!exists) {
+      return res.status(404).json({ ok: false, error: 'Processed file not found', jobId: id })
+    }
+
+    // Optionally set content-length and content-type from metadata
+    try {
+      const [meta] = await file.getMetadata()
+      if (meta && meta.size) res.setHeader('Content-Length', meta.size)
+      res.setHeader('Content-Type', 'video/mp4')
+    } catch (e) {}
+
+    // Force download filename
+    res.setHeader('Content-Disposition', `attachment; filename="${id}.mp4"`)
+
+    const stream = file.createReadStream()
+    stream.on('error', (err) => {
+      console.error('[jobs:download] stream error', id, err && (err.stack || err.message || err))
+      if (!res.headersSent) return res.status(500).json({ ok: false, error: 'Download failed' })
+      try { res.end() } catch (e) {}
+    })
+    stream.pipe(res)
+  } catch (e) {
+    console.error('[jobs:download] error', e && (e.stack || e.message || e))
+    return res.status(500).json({ ok: false, error: 'Download failed' })
+  }
+})
+
 // Retry endpoint to re-enqueue a job
 router.post('/:id/retry', async (req, res) => {
   const id = req.params.id
