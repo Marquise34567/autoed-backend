@@ -67,8 +67,9 @@ router.post('/', async (req, res) => {
     const file = bucket.file(destPath)
     const expiresAt = Date.now() + 15 * 60 * 1000 // milliseconds since epoch
 
-    // Create v4 signed URL for write (PUT). Do NOT bind contentType or extra headers.
-    const [uploadUrl] = await file.getSignedUrl({ version: 'v4', action: 'write', expires: expiresAt })
+    // Create v4 signed URL for write (PUT). Sign Content-Type to match browser PUT.
+    const ct = contentType || 'application/octet-stream'
+    const [uploadUrl] = await file.getSignedUrl({ version: 'v4', action: 'write', expires: expiresAt, contentType: ct })
 
     // Log query params helpful for debugging SignatureDoesNotMatch
     try {

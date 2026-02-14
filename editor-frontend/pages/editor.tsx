@@ -10,7 +10,8 @@ function Uploader(){
     if (!file) return setStatus('select a file')
     setStatus('requesting signed url')
     try {
-      const body = { filename: file.name }
+      const contentType = file.type || 'application/octet-stream'
+      const body = { filename: file.name, contentType }
       // Prefer explicit API base env var; default to local dev or Railway production
       const backendBase = process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8080'
       if (!process.env.NEXT_PUBLIC_API_BASE_URL) {
@@ -33,13 +34,16 @@ function Uploader(){
 
       const uploadUrl = json.uploadUrl
 
-      const uploadResponse = await fetch(uploadUrl, {
-        method: "PUT",
-        body: file
-      });
+      const putRes = await fetch(uploadUrl, {
+        method: 'PUT',
+        headers: { 'Content-Type': contentType },
+        body: file,
+        credentials: 'omit'
+      })
 
-      if (!uploadResponse.ok) {
-        throw new Error("Upload failed with status " + uploadResponse.status);
+      if (!putRes.ok) {
+        const text = await putRes.text()
+        throw new Error('Upload failed: ' + putRes.status + ' ' + text)
       }
       setStatus('uploaded')
     } catch (e: any) {

@@ -205,8 +205,9 @@ export async function POST(request: Request) {
       const file = bucket.file(storagePath)
       const expiresAt = Date.now() + SIGNED_URL_EXPIRES_IN * 1000 // milliseconds since epoch
 
-      // Create V4 signed URL for write (PUT). Do NOT include contentType or extra signed headers.
-      const [uploadUrl] = await file.getSignedUrl({ version: 'v4', action: 'write', expires: expiresAt })
+      // Create V4 signed URL for write (PUT). Sign Content-Type so browser PUT matches.
+      const contentTypeHeader = contentType || 'application/octet-stream'
+      const [uploadUrl] = await file.getSignedUrl({ version: 'v4', action: 'write', expires: expiresAt, contentType: contentTypeHeader })
 
       // Log query params for debugging
       try {
@@ -218,7 +219,7 @@ export async function POST(request: Request) {
         console.log(`${logPrefix} Signed URL created (unable to parse query params)`)
       }
 
-      return NextResponse.json({ uploadUrl, path: storagePath, jobId, tokenExpiresIn: SIGNED_URL_EXPIRES_IN }, { status: 200 })
+      return NextResponse.json({ uploadUrl, filePath: storagePath, expiresAt, jobId, tokenExpiresIn: SIGNED_URL_EXPIRES_IN }, { status: 200 })
     } catch (e: any) {
       console.error(`${logPrefix} Failed to create signed upload URL:`, e?.message || e)
       return NextResponse.json({ error: 'Failed to generate upload URL', details: e?.message || String(e) }, { status: 500 })

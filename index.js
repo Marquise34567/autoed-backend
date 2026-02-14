@@ -383,8 +383,9 @@ app.post('/api/upload-url', (req, res) => {
         const file = bucket.file(destPath)
         const expiresAt = Date.now() + 15 * 60 * 1000
 
-        // Sign URL without binding Content-Type
-        const [signedUrl] = await file.getSignedUrl({ version: 'v4', action: 'write', expires: expiresAt })
+        // Sign URL including Content-Type if provided so browser PUT can include it
+        const ct = (req.body && (req.body.contentType || req.body.contenttype)) || 'application/octet-stream'
+        const [signedUrl] = await file.getSignedUrl({ version: 'v4', action: 'write', expires: expiresAt, contentType: ct })
         try {
           const u = new URL(signedUrl)
           console.log('[upload-url fallback] signedUrl generated:', { path: destPath, bucket: bucket.name, 'X-Goog-SignedHeaders': u.searchParams.get('X-Goog-SignedHeaders'), 'X-Goog-Signature': u.searchParams.get('X-Goog-Signature') ? 'present' : 'missing' })
@@ -395,7 +396,7 @@ app.post('/api/upload-url', (req, res) => {
           console.error('[upload-url fallback] signedUrl is invalid', { path: destPath, bucket: bucket.name })
           return res.status(500).json({ error: 'SIGNED_URL_FAILED', details: 'signedUrl undefined' })
         }
-        return res.status(200).json({ uploadUrl: signedUrl, path: destPath, publicUrl: null })
+        return res.status(200).json({ uploadUrl: signedUrl, filePath: destPath, expiresAt, publicUrl: null })
       } catch (err) {
         console.error('[upload-url fallback] firebase error:', err && (err.message || err))
         return res.status(500).json({ ok: false, error: 'Failed to generate signed URL', details: err && err.message ? err.message : String(err) })
