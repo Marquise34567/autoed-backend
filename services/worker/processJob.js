@@ -459,8 +459,9 @@ async function processJob(jobId, inputSpec) {
       return remapped
     }
 
-    const remappedZooms = remapZoomsToFinal(aiZooms || [], merged)
-    console.log('[worker] AI zooms (original):', JSON.stringify(aiZooms || [], null, 2))
+    // Remap using only the safePlan zooms (guardrails-enforced)
+    const remappedZooms = remapZoomsToFinal(safePlan.zooms || [], merged)
+    console.log('[worker] AI zooms (original, safePlan):', JSON.stringify(safePlan.zooms || [], null, 2))
     console.log('[worker] AI zooms (remapped to final timeline):', JSON.stringify(remappedZooms, null, 2))
 
     // 4) Render with ffmpeg trim+concat + zooms
@@ -511,8 +512,8 @@ async function processJob(jobId, inputSpec) {
 
     let filter = ''
     const parts = merged.map((seg, idx) => {
-      // find zooms overlapping this original segment (use aiZooms original coords)
-      const zoomsForSeg = (aiZooms || []).map(z => ({ start: z.start, end: z.end, type: z.type, scale: z.scale, easing: z.easing, reason: z.reason })).filter(z => !(z.end <= seg.start || z.start >= seg.end)).map(z => ({ start: Math.max(0, z.start - seg.start), end: Math.min(seg.end - seg.start, z.end - seg.start), type: z.type, scale: z.scale, easing: z.easing, reason: z.reason }))
+      // find zooms overlapping this original segment (use safePlan.zooms original coords)
+      const zoomsForSeg = (safePlan.zooms || []).map(z => ({ start: z.start, end: z.end, type: z.type, scale: z.scale, easing: z.easing, reason: z.reason })).filter(z => !(z.end <= seg.start || z.start >= seg.end)).map(z => ({ start: Math.max(0, z.start - seg.start), end: Math.min(seg.end - seg.start, z.end - seg.start), type: z.type, scale: z.scale, easing: z.easing, reason: z.reason }))
       if (!zoomsForSeg.length) {
         const vs = `[0:v]trim=start=${seg.start}:end=${seg.end},setpts=PTS-STARTPTS[v${idx}];`
         const as = `[0:a]atrim=start=${seg.start}:end=${seg.end},asetpts=PTS-STARTPTS[a${idx}];`
