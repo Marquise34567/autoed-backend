@@ -63,17 +63,18 @@ router.post('/signed-put-test', async (req, res) => {
     const destPath = `uploads/test-${Date.now()}-${safeFilename}`
     const file = bucket.file(destPath)
     const expiresAt = new Date(Date.now() + 15 * 60 * 1000)
-    const ct = req.body && (req.body.contentType || req.body.contenttype || null)
-    // Sign without binding contentType by default
-    const signOpts = { version: 'v4', action: 'write', expires: expiresAt }
-    if (ct) signOpts.contentType = ct
-    const [signedUrl] = await file.getSignedUrl(signOpts)
+    // Use strict v4 write signed URL config (do not include contentType or extra headers)
+    const [signedUrl] = await file.getSignedUrl({
+      version: 'v4',
+      action: 'write',
+      expires: Date.now() + 15 * 60 * 1000
+    })
     try {
       const u = new URL(signedUrl)
       console.log('[debug signed-put-test] signedUrl params:', { 'X-Goog-SignedHeaders': u.searchParams.get('X-Goog-SignedHeaders'), 'X-Goog-Signature': u.searchParams.get('X-Goog-Signature') ? 'present' : 'missing' })
     } catch (_) {}
-    const put = await putToSignedUrl(signedUrl, 'hello', ct)
-    return res.json({ ok: true, signedUrlProvided: !!signedUrl, putStatus: put.status, putBody: put.body, path: destPath })
+    const put = await putToSignedUrl(signedUrl, 'hello')
+    return res.json({ ok: true, uploadUrl: signedUrl, signedUrlProvided: !!signedUrl, putStatus: put.status, putBody: put.body, path: destPath })
   } catch (err) {
     return res.status(500).json({ error: err && err.message ? err.message : String(err) })
   }
