@@ -14,7 +14,7 @@ async function processVideo(jobId, inputSpec) {
   console.log('Processing started:', jobId)
   try {
     // Mark processing started
-    await db.collection('jobs').doc(jobId).set({ status: 'processing', progress: 0, message: 'Processing started', updatedAt: Date.now() }, { merge: true })
+    await db.collection('jobs').doc(jobId).set({ status: 'PROCESSING', progress: 0, message: 'Processing started', updatedAt: Date.now() }, { merge: true })
 
     const bucket = admin.getBucket()
 
@@ -65,15 +65,15 @@ async function processVideo(jobId, inputSpec) {
           const otherBucket = admin.storage().bucket(bucketName)
           const remoteFile = otherBucket.file(filePath)
           const [exists] = await remoteFile.exists()
-          if (!exists) {
+            if (!exists) {
             console.error(`[jobs:${jobId}] Source file not found: ${gsPath}`)
-            await db.collection('jobs').doc(jobId).set({ status: 'failed', progress: 0, message: 'Source file not found', error: 'Source file missing', updatedAt: Date.now() }, { merge: true })
+            await db.collection('jobs').doc(jobId).set({ status: 'FAILED', progress: 0, message: 'Source file not found', errorMessage: 'Source file missing', updatedAt: Date.now() }, { merge: true })
             return
           }
           await remoteFile.download({ destination: localIn })
         } else {
           console.error(`[jobs:${jobId}] Invalid gs:// URI: ${gsPath}`)
-          await db.collection('jobs').doc(jobId).set({ status: 'failed', progress: 0, message: 'Invalid gsUri', error: 'Invalid gsUri', updatedAt: Date.now() }, { merge: true })
+          await db.collection('jobs').doc(jobId).set({ status: 'FAILED', progress: 0, message: 'Invalid gsUri', errorMessage: 'Invalid gsUri', updatedAt: Date.now() }, { merge: true })
           return
         }
       } else {
@@ -81,7 +81,7 @@ async function processVideo(jobId, inputSpec) {
         const [exists] = await remoteFile.exists()
         if (!exists) {
           console.error(`[jobs:${jobId}] Source file not found: ${filePath}`)
-          await db.collection('jobs').doc(jobId).set({ status: 'failed', progress: 0, message: 'Source file not found', error: 'Source file missing', updatedAt: Date.now() }, { merge: true })
+          await db.collection('jobs').doc(jobId).set({ status: 'FAILED', progress: 0, message: 'Source file not found', errorMessage: 'Source file missing', updatedAt: Date.now() }, { merge: true })
           return
         }
         await remoteFile.download({ destination: localIn })
@@ -89,7 +89,7 @@ async function processVideo(jobId, inputSpec) {
       await db.collection('jobs').doc(jobId).set({ progress: 10, message: 'Downloaded input', updatedAt: Date.now() }, { merge: true })
     } else {
       console.error(`[jobs:${jobId}] No input source provided`)
-      await db.collection('jobs').doc(jobId).set({ status: 'failed', progress: 0, message: 'No input source', error: 'Missing input', updatedAt: Date.now() }, { merge: true })
+      await db.collection('jobs').doc(jobId).set({ status: 'FAILED', progress: 0, message: 'No input source', errorMessage: 'Missing input', updatedAt: Date.now() }, { merge: true })
       return
     }
 
@@ -123,16 +123,34 @@ async function processVideo(jobId, inputSpec) {
       // fall back to storing path if signed URL generation fails
       resultUrl = null
     }
-    await db.collection('jobs').doc(jobId).set({ status: 'completed', progress: 100, resultUrl, finalVideoPath: finalPath, message: 'Completed', updatedAt: Date.now() }, { merge: true })
+    await db.collection('jobs').doc(jobId).set({ status: 'COMPLETE', progress: 100, resultUrl, finalVideoPath: finalPath, message: 'Completed', updatedAt: Date.now() }, { merge: true })
     console.log(`Processing completed: ${jobId} resultPath=${finalPath}`)
 
     // cleanup
     try { fs.unlinkSync(localIn) } catch (e) {}
     try { fs.unlinkSync(localOut) } catch (e) {}
-  } catch (err) {
+    } catch (err) {
     console.error(`[jobs:${jobId}] processing error:`, err && (err.stack || err.message || err))
-    try { await db.collection('jobs').doc(jobId).set({ status: 'failed', progress: 0, error: err && (err.message || String(err)), updatedAt: Date.now() }, { merge: true }) } catch (e) { console.error('[jobs] failed to write error state to Firestore', e) }
+    try { await db.collection('jobs').doc(jobId).set({ status: 'FAILED', progress: 0, errorMessage: err && (err.message || String(err)), updatedAt: Date.now() }, { merge: true }) } catch (e) { console.error('[jobs] failed to write error state to Firestore', e) }
   }
+}
+
+function normalizeJobRecord(raw) {
+  if (!raw) return null
+  const job = { ...raw }
+  // normalize status strings
+  const s = (job.status || job.state || '').toString().toUpperCase()
+  if (s === 'DONE' || s === 'COMPLETED' || s === 'COMPLETE') job.status = 'COMPLETE'
+  else if (s === 'PROCESSING') job.status = 'PROCESSING'
+  else if (s === 'QUEUED') job.status = 'QUEUED'
+  else if (s === 'ERROR' || s === 'FAILED') job.status = 'FAILED'
+  else job.status = s || 'QUEUED'
+
+  job.progress = Number.isFinite(Number(job.progress)) ? Number(job.progress) : 0
+  job.errorMessage = job.errorMessage || job.error || job.failure || null
+  job.resultUrl = job.resultUrl || job.outputUrl || job.videoUrl || null
+  job.finalVideoPath = job.finalVideoPath || job.outputPath || job.outputFile || null
+  return job
 }
 
 // In-memory job store for now
@@ -142,7 +160,7 @@ function makeJob({ id, path = null, filename = null, contentType = null }) {
   const createdAt = new Date().toISOString()
   return {
     id,
-    status: 'queued',
+    status: 'QUEUED',
     progress: 0,
     createdAt,
     path,
@@ -161,11 +179,13 @@ router.get('/', async (req, res) => {
         if (snap && snap.exists) {
           let job = snap.data()
           try { job = await attachSignedUrlsToJob(job, 30) } catch (e) {}
+          job = normalizeJobRecord(job)
           return res.status(200).json({ ok: true, job })
         }
       }
       let job = jobs.get(qid) || null
       try { job = await attachSignedUrlsToJob(job, 30) } catch (e) {}
+      job = normalizeJobRecord(job)
       return res.status(200).json({ ok: true, job })
     }
 
@@ -175,10 +195,12 @@ router.get('/', async (req, res) => {
       let arr = []
       snaps.forEach(s => arr.push(s.data()))
       try { arr = await Promise.all(arr.map(j => attachSignedUrlsToJob(j, 30))) } catch (e) {}
+      arr = arr.map(normalizeJobRecord)
       return res.status(200).json({ ok: true, jobs: arr, queued: listQueued() })
     }
     let arr = Array.from(jobs.values())
     try { arr = await Promise.all(arr.map(j => attachSignedUrlsToJob(j, 30))) } catch (e) {}
+    arr = arr.map(normalizeJobRecord)
     return res.status(200).json({ ok: true, jobs: arr, queued: listQueued() })
   } catch (e) {
     console.error('[jobs] GET error', e)
@@ -194,14 +216,31 @@ router.get('/:id', async (req, res) => {
     if (db) {
       const snap = await db.collection('jobs').doc(id).get()
       if (snap && snap.exists) {
-        let job = snap.data()
-        try { job = await attachSignedUrlsToJob(job, 30) } catch (e) {}
-        return res.status(200).json({ ok: true, job })
-      }
+          let job = snap.data()
+          try { job = await attachSignedUrlsToJob(job, 30) } catch (e) {}
+          job = normalizeJobRecord(job)
+          // Return a consistent, minimal job view for frontend
+          const out = {
+            id: job.id,
+            status: job.status,
+            progress: job.progress,
+            errorMessage: job.errorMessage || null,
+            resultUrl: job.resultUrl || job.outputUrl || null
+          }
+          return res.status(200).json({ ok: true, job: out })
+        }
     }
     let job = jobs.get(id) || null
     try { job = await attachSignedUrlsToJob(job, 30) } catch (e) {}
-    return res.status(200).json({ ok: true, job })
+    job = normalizeJobRecord(job)
+    const out = {
+      id: job.id,
+      status: job.status,
+      progress: job.progress,
+      errorMessage: job.errorMessage || null,
+      resultUrl: job.resultUrl || job.outputUrl || null
+    }
+    return res.status(200).json({ ok: true, job: out })
   } catch (e) {
     console.error('[jobs] GET /:id error', e)
     return res.status(500).json({ ok: false, error: e && e.message ? e.message : String(e) })
@@ -256,7 +295,7 @@ router.post('/:id/retry', async (req, res) => {
     const snap = await db.collection('jobs').doc(id).get()
     if (!snap.exists) return res.status(404).json({ ok: false, error: 'Job not found' })
     const data = snap.data()
-    await db.collection('jobs').doc(id).set({ status: 'queued', progress: 0, message: 'Re-queued', updatedAt: Date.now() }, { merge: true })
+    await db.collection('jobs').doc(id).set({ status: 'QUEUED', progress: 0, message: 'Re-queued', updatedAt: Date.now() }, { merge: true })
     reenqueue(id, data.inputSpec || {})
     console.log('Re-enqueued', id)
     return res.status(200).json({ ok: true, jobId: id })
@@ -272,6 +311,7 @@ router.post('/', async (req, res) => {
     console.log('[jobs] POST incoming')
     const body = req.body || {}
     const { storagePath, gsUri, downloadURL, filename, contentType } = body
+    const smartZoom = body.smartZoom || null
 
     // REQUIRE storagePath to match frontend behavior
     if (!storagePath) {
@@ -293,7 +333,7 @@ router.post('/', async (req, res) => {
       await db.collection('jobs').doc(jobId).set({
         id: jobId,
         uid: null,
-        status: 'queued',
+        status: 'QUEUED',
         progress: 0,
         createdAt: now,
         updatedAt: now,
@@ -313,6 +353,8 @@ router.post('/', async (req, res) => {
     job.inputSpec = inputSpec
     jobs.set(jobId, job)
 
+    console.log('[jobs] create', { jobId, storagePath, downloadURL, filename, contentType, smartZoom })
+
     try {
       enqueue(jobId, inputSpec)
       console.log(`[jobs] enqueued ${jobId}`)
@@ -320,10 +362,30 @@ router.post('/', async (req, res) => {
       console.error('[jobs] failed to enqueue', e && (e.message || e))
     }
 
-    return res.status(200).json({ ok: true, jobId })
+    // Return consistent API contract to frontend
+    return res.status(201).json({ id: jobId, status: 'QUEUED' })
   } catch (err) {
     console.error('[jobs] POST error', err && (err.stack || err.message || err))
-    return res.status(500).json({ ok: false, error: 'Internal server error' })
+    return res.status(500).json({ ok: false, errorMessage: 'Internal server error' })
+  }
+})
+
+// Start a job immediately (transition to PROCESSING and enqueue)
+router.post('/:id/start', async (req, res) => {
+  const id = req.params.id
+  if (!id) return res.status(400).json({ ok: false, errorMessage: 'Missing id' })
+  try {
+    if (!db) return res.status(500).json({ ok: false, errorMessage: 'Firestore not available' })
+    const snap = await db.collection('jobs').doc(id).get()
+    if (!snap.exists) return res.status(404).json({ ok: false, errorMessage: 'Job not found' })
+    const data = snap.data() || {}
+    await db.collection('jobs').doc(id).set({ status: 'PROCESSING', progress: 0, message: 'Manually started', updatedAt: Date.now() }, { merge: true })
+    try { enqueue(id, data.inputSpec || {}) } catch (e) { console.error('[jobs] failed to enqueue on start', e) }
+    console.log('[jobs] start invoked for', id)
+    return res.status(200).json({ id, status: 'PROCESSING' })
+  } catch (e) {
+    console.error('[jobs] start error', e)
+    return res.status(500).json({ ok: false, errorMessage: e && e.message ? e.message : String(e) })
   }
 })
 

@@ -325,6 +325,8 @@ app.get('/api/userdoc', (_req, res) => res.json({ ok: true }))
 app.use('/api/health', require('./routes/health'))
 app.use('/api/ping', require('./routes/ping'))
 app.use("/api/jobs", require("./routes/jobs"))
+// Also mount non-/api path for backward compatibility (frontend may call /jobs)
+app.use("/jobs", require("./routes/jobs"))
 app.use('/api/job-status', require('./routes/job-status'))
 app.use('/api/userdoc', require('./routes/userdoc'))
 // Signed-upload endpoints removed to enforce client-side Firebase SDK uploads.
