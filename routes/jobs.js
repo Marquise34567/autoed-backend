@@ -217,51 +217,30 @@ router.get('/:id/download', async (req, res) => {
   const id = req.params.id
   if (!id) return res.status(400).json({ ok: false, error: 'Missing id' })
   try {
-    const localPath = require('path').resolve(process.cwd(), 'renders', `${id}.mp4`)
-    const fs = require('fs')
-
-    // Prefer a local render path for fast local dev/testing
-    if (fs.existsSync(localPath)) {
-      return res.download(localPath, `${id}.mp4`)
-    }
-
-    // Otherwise, try to stream from GCS using the job record's finalVideoPath
-    let finalPath = null
+    // Determine expected output path from job doc or guess
+    let filePath = null
     if (db) {
       const snap = await db.collection('jobs').doc(id).get()
       if (snap && snap.exists) {
         const job = snap.data()
-        finalPath = job && (job.finalVideoPath || job.finalPath || null)
+        filePath = job && (job.outputPath || job.outputFile || job.finalVideoPath || null)
       }
     }
 
-    // Fallback guess if job record has no path
-    if (!finalPath) finalPath = `outputs/${id}/final.mp4`
+    if (!filePath) filePath = `results/${id}/output.mp4`
 
-    const bucket = admin.getBucket()
-    const file = bucket.file(finalPath)
-    const [exists] = await file.exists()
-    if (!exists) {
-      return res.status(404).json({ ok: false, error: 'Processed file not found', jobId: id })
-    }
-
-    // Optionally set content-length and content-type from metadata
     try {
-      const [meta] = await file.getMetadata()
-      if (meta && meta.size) res.setHeader('Content-Length', meta.size)
-      res.setHeader('Content-Type', 'video/mp4')
-    } catch (e) {}
-
-    // Force download filename
-    res.setHeader('Content-Disposition', `attachment; filename="${id}.mp4"`)
-
-    const stream = file.createReadStream()
-    stream.on('error', (err) => {
-      console.error('[jobs:download] stream error', id, err && (err.stack || err.message || err))
-      if (!res.headersSent) return res.status(500).json({ ok: false, error: 'Download failed' })
-      try { res.end() } catch (e) {}
-    })
-    stream.pipe(res)
+      const url = await getSignedUrlForPath(filePath, 60)
+      return res.json({ downloadUrl: url })
+    } catch (err) {
+      // If object not found, surface 404 with expected path
+      const msg = err && err.message ? err.message : String(err)
+      if (msg.includes('Storage object not found')) {
+        return res.status(404).json({ error: 'Output video not found', expected: filePath })
+      }
+      console.error('[jobs:download] failed to generate signed URL', err && (err.stack || err.message || err))
+      return res.status(500).json({ error: 'download failed' })
+    }
   } catch (e) {
     console.error('[jobs:download] error', e && (e.stack || e.message || e))
     return res.status(500).json({ ok: false, error: 'Download failed' })
