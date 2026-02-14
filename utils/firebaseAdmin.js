@@ -9,7 +9,9 @@ const storageBucket = rawStorageBucket && String(rawStorageBucket).trim();
 function getBucketName() {
   if (!storageBucket) return null
   // allow values like 'gs://bucket/name' or plain bucket name
-  return storageBucket.replace(/^gs:\/\//i, '').trim()
+  // strip optional surrounding quotes and gs:// prefix
+  const stripped = storageBucket.replace(/^"|"$/g, '').replace(/^'|'$/g, '')
+  return stripped.replace(/^gs:\/\//i, '').trim()
 }
 
 // Validate required env vars

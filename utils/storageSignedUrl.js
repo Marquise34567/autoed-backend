@@ -18,7 +18,7 @@ function _extractPathFromStorageUrl(url) {
   // normalize: remove whitespace/newlines that may have been introduced
   const cleaned = url.replace(/\s+/g, '')
   // match https://storage.googleapis.com/<bucket>/<path>
-  const m = cleaned.match(/^https?:\/\/storage.googleapis.com\/(?:([^\/]+)\/)??(.+)$/i)
+  const m = cleaned.match(/^https?:\/\/storage.googleapis.com\/(?:([^\/]+)\/)?(.+)$/i)
   if (!m) return null
   const bucket = m[1] || null
   const path = m[2]
@@ -80,17 +80,27 @@ async function attachSignedUrlsToJob(job, expiresMinutes = 30) {
         if (v && typeof v === 'string') {
           // if it's a storage path (no host) or a storage.googleapis.com url
           let objPath = null
-          if (v.startsWith('outputs/') || v.startsWith('results/') || v.startsWith('uploads/')) objPath = v
-          else if (v.includes('storage.googleapis.com')) objPath = _extractPathFromStorageUrl(v)
+          let objBucket = null
+          if (v.startsWith('outputs/') || v.startsWith('results/') || v.startsWith('uploads/')) {
+            objPath = v
+          } else if (v.includes('storage.googleapis.com')) {
+            const parsed = _extractPathFromStorageUrl(v)
+            if (parsed && parsed.path) {
+              objPath = parsed.path
+              objBucket = parsed.bucket || null
+            }
+          }
+
           if (objPath) {
             try {
-              const f = bucket.file(objPath)
+              const useBucket = objBucket ? admin.getBucket(objBucket) : bucket
+              const f = useBucket.file(objPath)
               const [exists] = await f.exists()
               if (exists) {
                 try {
-                  out[k] = await getSignedUrlForPath(objPath, expiresMinutes)
+                  out[k] = await getSignedUrlForPath(objPath, expiresMinutes, objBucket)
                 } catch (err) {
-                  console.warn('[storageSignedUrl] failed to generate signed URL for resultUrls key', k, objPath, err && err.message ? err.message : err)
+                  console.warn('[storageSignedUrl] failed to generate signed URL for resultUrls key', k, objBucket || admin.getBucketName && admin.getBucketName(), objPath, err && err.message ? err.message : err)
                   out[k] = v
                 }
               }
