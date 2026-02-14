@@ -1,23 +1,30 @@
 const admin = require('firebase-admin')
 
 if (!admin.apps.length) {
-  if (!process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
-    throw new Error('Missing FIREBASE_SERVICE_ACCOUNT_JSON')
+  const required = ['FIREBASE_PROJECT_ID', 'FIREBASE_CLIENT_EMAIL', 'FIREBASE_PRIVATE_KEY']
+  const missing = required.filter((k) => !process.env[k])
+  if (missing.length) {
+    throw new Error(`Missing required Firebase environment variables: ${missing.join(', ')}`)
   }
 
-  let serviceAccount
+  // Safely construct the service account credential without logging secrets
+  const serviceAccount = {
+    projectId: process.env.FIREBASE_PROJECT_ID,
+    clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+    // Convert escaped newlines into real newlines
+    privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+  }
+
   try {
-    serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON)
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount),
+      storageBucket: process.env.FIREBASE_STORAGE_BUCKET,
+    })
+    console.log('[firebaseAdmin] initialized via FIREBASE_* environment variables')
   } catch (e) {
-    console.error('[firebaseAdmin] Failed to parse FIREBASE_SERVICE_ACCOUNT_JSON:', e && e.message ? e.message : e)
+    console.error('[firebaseAdmin] Failed to initialize Firebase Admin SDK:', e && e.message ? e.message : e)
     throw e
   }
-
-  admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount),
-    storageBucket: process.env.FIREBASE_STORAGE_BUCKET,
-  })
-  console.log('[firebaseAdmin] initialized via FIREBASE_SERVICE_ACCOUNT_JSON')
 }
 
 // Verify storage bucket exists and is accessible.

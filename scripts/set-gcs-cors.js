@@ -3,17 +3,20 @@ const { Storage } = require('@google-cloud/storage')
 const fs = require('fs')
 
 function getServiceAccount() {
-  const env = process.env.FIREBASE_SERVICE_ACCOUNT_JSON
-  if (!env) return null
-  // If env is a path to a file, read it
-  if (env.trim().startsWith('{')) {
-    try { return JSON.parse(env) } catch (e) { throw new Error('FIREBASE_SERVICE_ACCOUNT_JSON is invalid JSON') }
+  // Prefer split environment variables for credentials
+  const projectId = process.env.FIREBASE_PROJECT_ID
+  const clientEmail = process.env.FIREBASE_CLIENT_EMAIL
+  const privateKeyRaw = process.env.FIREBASE_PRIVATE_KEY
+  if (projectId && clientEmail && privateKeyRaw) {
+    return {
+      project_id: projectId,
+      client_email: clientEmail,
+      private_key: String(privateKeyRaw).replace(/\\n/g, '\n'),
+    }
   }
-  // otherwise treat as file path
-  if (fs.existsSync(env)) {
-    try { return JSON.parse(fs.readFileSync(env, 'utf8')) } catch (e) { throw new Error('Failed to parse service account file') }
-  }
-  throw new Error('FIREBASE_SERVICE_ACCOUNT_JSON must be JSON string or path to JSON file')
+
+  // No explicit credentials provided; return null to let the client use ADC
+  return null
 }
 
 function normalizeBucket(raw) {
@@ -36,7 +39,7 @@ async function main() {
     if (sa) {
       storage = new Storage({ projectId: sa.project_id, credentials: sa })
     } else {
-      console.log('FIREBASE_SERVICE_ACCOUNT_JSON not provided; falling back to Application Default Credentials')
+      console.log('No explicit Firebase credentials provided; falling back to Application Default Credentials')
       storage = new Storage()
     }
     const bucket = storage.bucket(bucketName)
