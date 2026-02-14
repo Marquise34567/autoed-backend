@@ -8,18 +8,37 @@ const admin = require('../../utils/firebaseAdmin')
 const db = admin.db || (admin.firestore && admin.firestore())
 
 async function streamDownload(url, dest) {
+  // Follow up to 5 redirects
   return new Promise((resolve, reject) => {
+    const maxRedirects = 5
+    let redirects = 0
+
+    function _get(u) {
+      try {
+        const lib = u.protocol === 'https:' ? https : http
+        const req = lib.get(u, (res) => {
+          // handle redirects
+          if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && redirects < maxRedirects) {
+            redirects++
+            const next = new URL(res.headers.location, u)
+            res.resume()
+            return _get(next)
+          }
+          if (!res.statusCode || res.statusCode >= 400) return reject(new Error(`Failed to fetch ${url}: status ${res.statusCode}`))
+          const fileStream = fs.createWriteStream(dest)
+          res.pipe(fileStream)
+          fileStream.on('finish', () => resolve())
+          fileStream.on('error', reject)
+        })
+        req.on('error', reject)
+      } catch (err) {
+        reject(err)
+      }
+    }
+
     try {
       const u = new URL(url)
-      const lib = u.protocol === 'https:' ? https : http
-      const req = lib.get(u, (res) => {
-        if (!res.statusCode || res.statusCode >= 400) return reject(new Error(`Failed to fetch ${url}: status ${res.statusCode}`))
-        const fileStream = fs.createWriteStream(dest)
-        res.pipe(fileStream)
-        fileStream.on('finish', () => resolve())
-        fileStream.on('error', reject)
-      })
-      req.on('error', reject)
+      _get(u)
     } catch (err) {
       reject(err)
     }
@@ -70,9 +89,10 @@ async function processJob(jobId, inputSpec) {
     if (typeof inputSpec === 'string') {
       gsUri = inputSpec
     } else if (inputSpec && typeof inputSpec === 'object') {
-      downloadURL = inputSpec.downloadURL || inputSpec.downloadUrl || null
-      gsUri = inputSpec.gsUri || null
+      // prefer storagePath/gsUri over downloadURL
       storagePath = inputSpec.storagePath || null
+      gsUri = inputSpec.gsUri || null
+      downloadURL = inputSpec.downloadURL || inputSpec.downloadUrl || null
     }
 
     // Prepare tmp
@@ -83,17 +103,37 @@ async function processJob(jobId, inputSpec) {
 
     // Fetch input
     console.log(`DOWNLOADING INPUT ${jobId}`)
-    if (downloadURL) {
-      console.log(`[worker:${jobId}] downloading from URL: ${downloadURL}`)
+    // Prefer storagePath
+    if (storagePath) {
+      try {
+        const bucketName = admin.getBucketName && admin.getBucketName()
+        console.log(`[worker:${jobId}] using storagePath: ${storagePath} bucket=${bucketName}`)
+        await db.collection('jobs').doc(jobId).set({ progress: 5, message: 'Downloading from storagePath', updatedAt: Date.now() }, { merge: true })
+        const bucket = admin.getBucket(bucketName)
+        const remoteFile = bucket.file(storagePath)
+        const [exists] = await remoteFile.exists()
+        if (!exists) throw new Error(`Source file not found: ${storagePath}`)
+        await remoteFile.download({ destination: localIn })
+        await db.collection('jobs').doc(jobId).set({ progress: 20, message: 'Downloaded from storagePath', updatedAt: Date.now() }, { merge: true })
+      } catch (e) {
+        throw e
+      }
+    } else if (gsUri) {
+      // parse gs://bucket/path
+      console.log(`[worker:${jobId}] using gsUri: ${gsUri}`)
+      await db.collection('jobs').doc(jobId).set({ progress: 5, message: 'Downloading from gsUri', updatedAt: Date.now() }, { merge: true })
+      await downloadFromGs(gsUri, localIn)
+      await db.collection('jobs').doc(jobId).set({ progress: 20, message: 'Downloaded from gsUri', updatedAt: Date.now() }, { merge: true })
+    } else if (downloadURL) {
+      // Log whether URL contains alt=media and token= (but don't log token value)
+      const containsAlt = downloadURL.includes('alt=media')
+      const containsToken = downloadURL.includes('token=')
+      const redacted = downloadURL.replace(/(token=)[^&]+/i, '$1<redacted>')
+      console.log(`[worker:${jobId}] downloading from URL (redacted first120): ${redacted.slice(0,120)}`)
+      console.log(`[worker:${jobId}] downloadURL contains alt=media=${containsAlt} token=${containsToken}`)
       await db.collection('jobs').doc(jobId).set({ progress: 5, message: 'Downloading from URL', updatedAt: Date.now() }, { merge: true })
       await streamDownload(downloadURL, localIn)
       await db.collection('jobs').doc(jobId).set({ progress: 20, message: 'Downloaded from URL', updatedAt: Date.now() }, { merge: true })
-    } else if (gsUri || storagePath) {
-      const src = gsUri || storagePath
-      console.log(`[worker:${jobId}] downloading from storage: ${src}`)
-      await db.collection('jobs').doc(jobId).set({ progress: 5, message: 'Downloading from storage', updatedAt: Date.now() }, { merge: true })
-      await downloadFromGs(src, localIn)
-      await db.collection('jobs').doc(jobId).set({ progress: 20, message: 'Downloaded from storage', updatedAt: Date.now() }, { merge: true })
     } else {
       throw new Error('No input source provided')
     }
