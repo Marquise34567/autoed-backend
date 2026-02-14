@@ -381,21 +381,159 @@ async function processJob(jobId, inputSpec) {
 
     if (!merged.length) throw new Error('No segments to render after AI plan/fallback')
 
-    // 4) Render with ffmpeg trim+concat
-    await setStage('Pacing', 80, 'Rendering final video')
+    // 3b) Ask OpenAI for zoom keyframes (strict JSON schema)
+    await setStage('Adding Hooks', 50, 'Requesting zoom keyframes from AI')
+    let aiZooms = null
+    async function callOpenAIZooms(transcript, duration) {
+      const model = process.env.OPENAI_MODEL || 'gpt-4'
+      const system = `You are an expert video editor producing a STRICT JSON array of zoom keyframes following the exact schema. Return ONLY JSON.`
+      const user = `SCHEMA:\n{ "zooms": [ { "start": 12.0, "end": 15.5, "type": "in|out", "scale": 1.06, "easing": "linear|easeInOut", "reason": "text" } ] }\n\nRULES:\n- zoom events every ~6-12s when possible; scale ranges: in 1.03-1.12, out 1.00-1.06; duration 0.8-3.0s; within video duration; min 1.5s between events.\n\nTRANSCRIPT:\n${transcript || ''}\n\nDURATION:${duration || 'unknown'}\n\nReturn only the JSON object (no explanation).`
+      const payload = { model, messages: [ { role: 'system', content: system }, { role: 'user', content: user } ], max_tokens: 800, temperature: 0.2 }
+      const resp = await fetch('https://api.openai.com/v1/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${OPENAI_KEY}` }, body: JSON.stringify(payload) })
+      if (!resp.ok) throw new Error('OpenAI zoom request failed: ' + resp.status)
+      const j = await resp.json()
+      const txt = j.choices && j.choices[0] && (j.choices[0].message && j.choices[0].message.content) || j.choices && j.choices[0] && j.choices[0].text
+      if (!txt) throw new Error('No content from OpenAI (zooms)')
+      const m = txt.match(/\{[\s\S]*\}$/m)
+      const jsonStr = m ? m[0] : txt
+      let parsed = null
+      try { parsed = JSON.parse(jsonStr) } catch (e) { throw new Error('Failed to parse zoom JSON from OpenAI: ' + e.message) }
+      return parsed
+    }
+
+    function validateZooms(obj, dur) {
+      if (!obj || typeof obj !== 'object') return false
+      if (!Array.isArray(obj.zooms)) return false
+      const zooms = obj.zooms
+      for (const z of zooms) {
+        if (typeof z.start !== 'number' || typeof z.end !== 'number') return false
+        if (!(z.type === 'in' || z.type === 'out')) return false
+        if (typeof z.scale !== 'number') return false
+        if (!(z.easing === 'linear' || z.easing === 'easeInOut')) return false
+        if (z.start < 0 || z.end <= z.start) return false
+        if (dur && z.end > dur) return false
+        const durZoom = z.end - z.start
+        if (durZoom < 0.8 || durZoom > 3.0) return false
+        if (z.type === 'in' && (z.scale < 1.03 || z.scale > 1.12)) return false
+        if (z.type === 'out' && (z.scale < 1.0 || z.scale > 1.06)) return false
+      }
+      // enforce min gap 1.5s
+      const sorted = zooms.slice().sort((a,b) => a.start - b.start)
+      for (let i=1;i<sorted.length;i++) if (sorted[i].start - sorted[i-1].end < 1.5) return false
+      return true
+    }
+
+    try {
+      if (OPENAI_KEY && transcriptText) {
+        const zresp = await callOpenAIZooms(transcriptText, duration)
+        if (validateZooms(zresp, duration)) aiZooms = zresp.zooms
+        else {
+          console.warn('[worker] AI zooms invalid per schema')
+          aiZooms = []
+        }
+      } else {
+        aiZooms = []
+      }
+    } catch (e) {
+      console.warn('[worker] failed to get AI zooms', e && (e.message || e))
+      aiZooms = []
+    }
+
+    // Remap original zoom timestamps -> final timeline (merged segments)
+    function remapZoomsToFinal(zooms, segments) {
+      const remapped = []
+      let cursor = 0
+      for (const seg of segments) {
+        const segLen = seg.end - seg.start
+        for (const z of zooms) {
+          const interStart = Math.max(seg.start, z.start)
+          const interEnd = Math.min(seg.end, z.end)
+          if (interEnd > interStart) {
+            const localStart = interStart - seg.start
+            const localEnd = interEnd - seg.start
+            remapped.push({ start: cursor + localStart, end: cursor + localEnd, type: z.type, scale: z.scale, easing: z.easing, reason: z.reason })
+          }
+        }
+        cursor += segLen
+      }
+      return remapped
+    }
+
+    const remappedZooms = remapZoomsToFinal(aiZooms || [], merged)
+    console.log('[worker] AI zooms (original):', JSON.stringify(aiZooms || [], null, 2))
+    console.log('[worker] AI zooms (remapped to final timeline):', JSON.stringify(remappedZooms, null, 2))
+
+    // 4) Render with ffmpeg trim+concat + zooms
+    await setStage('Pacing', 80, 'Rendering final video with zooms')
     const localOut = path.resolve(outDir, `${jobId}-output.mp4`)
-    // build filter_complex
+
+    // probe input for resolution/fps
+    let WIDTH = 1280, HEIGHT = 720, FPS = 30
+    try {
+      const probeOut = await new Promise((resolve, reject) => {
+        exec(`ffprobe -v error -select_streams v:0 -show_entries stream=width,height,r_frame_rate -of default=noprint_wrappers=1:nokey=1 "${localIn}"`, (err, stdout) => err ? reject(err) : resolve(stdout))
+      })
+      const lines = probeOut.trim().split(/\r?\n/)
+      if (lines[0]) WIDTH = parseInt(lines[0]) || WIDTH
+      if (lines[1]) HEIGHT = parseInt(lines[1]) || HEIGHT
+      if (lines[2]) {
+        const rf = lines[2]
+        const parts = rf.split('/')
+        if (parts.length === 2) FPS = Math.round(parseFloat(parts[0]) / parseFloat(parts[1])) || FPS
+        else FPS = Math.round(parseFloat(rf)) || FPS
+      }
+    } catch (e) { console.warn('[worker] ffprobe failed, using defaults for WIDTH/HEIGHT/FPS', e && e.message || e) }
+
+    // build filter_complex per-segment; if a segment has zooms (based on original times), apply zoompan
+    function buildZoomExprForLocal(zoomsLocal) {
+      if (!zoomsLocal || !zoomsLocal.length) return null
+      // sort by start
+      zoomsLocal.sort((a,b) => a.start - b.start)
+      // build nested if expression: if(between(t,ZS,ZE), expr, if(between(t,ZS2,ZE2), expr2, 1))
+      let expr = '1'
+      for (let i = zoomsLocal.length - 1; i >= 0; i--) {
+        const z = zoomsLocal[i]
+        const ZS = z.start.toFixed(3)
+        const ZE = z.end.toFixed(3)
+        const S = z.scale
+        if (z.easing === 'easeInOut') {
+          // p = (t-ZS)/(ZE-ZS); eased = 0.5*(1-cos(pi*p))
+          const eased = `0.5*(1-cos(3.141592653589793*(t-${ZS})/(${ZE}-${ZS})))`
+          const piece = `1+(${S}-1)*(${eased})`
+          expr = `if(between(t,${ZS},${ZE}),${piece},${expr})`
+        } else {
+          const piece = `1+(${S}-1)*((t-${ZS})/(${ZE}-${ZS}))`
+          expr = `if(between(t,${ZS},${ZE}),${piece},${expr})`
+        }
+      }
+      return expr
+    }
+
     let filter = ''
-    const inputs = []
     const parts = merged.map((seg, idx) => {
-      const vs = `[0:v]trim=start=${seg.start}:end=${seg.end},setpts=PTS-STARTPTS[v${idx}];`
+      // find zooms overlapping this original segment (use aiZooms original coords)
+      const zoomsForSeg = (aiZooms || []).map(z => ({ start: z.start, end: z.end, type: z.type, scale: z.scale, easing: z.easing, reason: z.reason })).filter(z => !(z.end <= seg.start || z.start >= seg.end)).map(z => ({ start: Math.max(0, z.start - seg.start), end: Math.min(seg.end - seg.start, z.end - seg.start), type: z.type, scale: z.scale, easing: z.easing, reason: z.reason }))
+      if (!zoomsForSeg.length) {
+        const vs = `[0:v]trim=start=${seg.start}:end=${seg.end},setpts=PTS-STARTPTS[v${idx}];`
+        const as = `[0:a]atrim=start=${seg.start}:end=${seg.end},asetpts=PTS-STARTPTS[a${idx}];`
+        return { vs, as }
+      }
+      // build zoom expression using local times
+      const zoomExpr = buildZoomExprForLocal(zoomsForSeg)
+      // center crop expressions x/y keep center
+      const xExpr = `iw/2-(iw/zoom/2)`
+      const yExpr = `ih/2-(ih/zoom/2)`
+      const vs = `[0:v]trim=start=${seg.start}:end=${seg.end},setpts=PTS-STARTPTS,zoompan=z='${zoomExpr.replace(/'/g, "\\'") }':x='${xExpr}':y='${yExpr}':d=1:s=${WIDTH}x${HEIGHT}:fps=${FPS}[v${idx}];`
       const as = `[0:a]atrim=start=${seg.start}:end=${seg.end},asetpts=PTS-STARTPTS[a${idx}];`
       return { vs, as }
     })
+
     filter = parts.map(p => p.vs + p.as).join('')
     const concatInputs = merged.map((_, idx) => `[v${idx}][a${idx}]`).join('')
     const concat = `${concatInputs}concat=n=${merged.length}:v=1:a=1[outv][outa]`
     const fullFilter = filter + concat
+    console.log('[worker] ffmpeg filter_complex:', fullFilter)
+
     const ffCmd = `ffmpeg -y -i "${localIn}" -filter_complex "${fullFilter}" -map "[outv]" -map "[outa]" -c:v libx264 -preset veryfast -crf 23 -c:a aac -movflags +faststart "${localOut}"`
     console.log('[worker] ffmpeg render cmd:', ffCmd)
     await new Promise((resolve, reject) => {
