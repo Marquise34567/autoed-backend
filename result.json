@@ -1,0 +1,10 @@
+<?xml version='1.0' encoding='UTF-8'?><Error><Code>SignatureDoesNotMatch</Code><Message>Access denied.</Message><Details>The request signature we calculated does not match the signature you provided. Check your Google secret key and signing method.</Details><StringToSign>GOOG4-RSA-SHA256
+20260214T181644Z
+20260214/auto/storage/goog4_request
+8e2782a5f75ee8bd7a54f9c7abb76c04e56049b01858b06428e8721a213abff6</StringToSign><CanonicalRequest>GET
+/autoeditor-d4940-uploads-01/results/JOBID/result.json
+X-Goog-Algorithm=GOOG4-RSA-SHA256&amp;X-Goog-Credential=firebase-adminsdk-fbsvc%40autoeditor-d4940.iam.gserviceaccount.com%2F20260214%2Fauto%2Fstorage%2Fgoog4_request&amp;X-Goog-Date=20260214T181644Z&amp;X-Goog-Expires=1800&amp;X-Goog-SignedHeaders=host
+host:storage.googleapis.com
+
+host
+UNSIGNED-PAYLOAD</CanonicalRequest></Error>
