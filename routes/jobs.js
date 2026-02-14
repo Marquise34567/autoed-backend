@@ -5,6 +5,7 @@ const fs = require('fs')
 const path = require('path')
 const { exec } = require('child_process')
 const admin = require('../utils/firebaseAdmin')
+const { processJob } = require('../services/worker/processJob')
 const db = admin.db
 
 async function processVideo(jobId, inputSpec) {
@@ -152,13 +153,27 @@ router.get('/', (req, res) => {
 router.get('/:id', (req, res) => {
   const id = req.params.id
   if (!id) return res.status(400).json({ ok: false, error: 'Missing id' })
-  let job = jobs.get(id)
-  if (!job) {
-    job = makeJob({ id })
-    jobs.set(id, job)
-    console.log(`[jobs] created ${id} path=${job.path}`)
-  }
-  return res.status(200).json({ ok: true, job })
+  ;(async () => {
+    try {
+      // Prefer Firestore job status if available
+      if (db) {
+        const snap = await db.collection('jobs').doc(id).get()
+        if (snap && snap.exists) {
+          return res.status(200).json({ ok: true, job: snap.data() })
+        }
+      }
+      let job = jobs.get(id)
+      if (!job) {
+        job = makeJob({ id })
+        jobs.set(id, job)
+        console.log(`[jobs] created ${id} path=${job.path}`)
+      }
+      return res.status(200).json({ ok: true, job })
+    } catch (e) {
+      console.error('[jobs] GET /:id error', e)
+      return res.status(500).json({ ok: false, error: e && e.message ? e.message : String(e) })
+    }
+  })()
 })
 
 // Create a job
@@ -216,8 +231,8 @@ router.post('/', (req, res) => {
     const gsUri = incomingGsUri || (storagePath && (admin.getBucketName ? `gs://${admin.getBucketName()}/${storagePath}` : null)) || undefined
     job.inputSpec = { storagePath: storagePath || undefined, gsUri: gsUri || undefined, downloadURL: downloadURL || undefined }
     setImmediate(() => {
-      processVideo(jobId, job.inputSpec).catch((e) => {
-        console.error(`[jobs:${jobId}] processVideo uncaught error:`, e)
+      processJob(jobId, job.inputSpec).catch((e) => {
+        console.error(`[jobs:${jobId}] processJob uncaught error:`, e)
         try { db.collection('jobs').doc(jobId).set({ status: 'failed', error: e && (e.message || String(e)), updatedAt: Date.now() }, { merge: true }) } catch (_) {}
       })
     })

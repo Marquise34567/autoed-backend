@@ -55,3 +55,4 @@ module.exports.getBucket = function(name) {
   return admin.storage().bucket(bn)
 }
 module.exports.getBucketName = getBucketName
+module.exports.db = admin.firestore()
