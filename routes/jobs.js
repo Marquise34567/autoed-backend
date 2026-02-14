@@ -7,23 +7,88 @@ const { exec } = require('child_process')
 const admin = require('../utils/firebaseAdmin')
 const db = admin.db
 
-async function processVideo(jobId, inputPath) {
+async function processVideo(jobId, inputSpec) {
   console.log('Processing started:', jobId)
   try {
     // Mark processing started
-    await db.collection('jobs').doc(jobId).set({ status: 'processing', progress: 10, message: 'Processing started', updatedAt: Date.now() }, { merge: true })
+    await db.collection('jobs').doc(jobId).set({ status: 'processing', progress: 0, message: 'Processing started', updatedAt: Date.now() }, { merge: true })
 
     const bucket = admin.getBucket()
+
+    // Determine input source
+    let downloadURL = null
+    let gsPath = null
+    if (typeof inputSpec === 'string') gsPath = inputSpec
+    else {
+      downloadURL = inputSpec.downloadURL || inputSpec.downloadUrl || null
+      gsPath = inputSpec.storagePath || inputSpec.gsUri || inputSpec.path || null
+    }
 
     // Download to /tmp/uploads
     const tmpDir = path.resolve(process.cwd(), 'tmp', 'uploads')
     fs.mkdirSync(tmpDir, { recursive: true })
-    const safeName = path.basename(inputPath).replace(/[^a-z0-9.\-_]/gi, '_')
-    const localIn = path.resolve(tmpDir, `${jobId}-${safeName}`)
-    console.log(`[jobs:${jobId}] Downloading ${inputPath} -> ${localIn}`)
-    await bucket.file(inputPath).download({ destination: localIn })
-    console.log('Video downloaded')
-    await db.collection('jobs').doc(jobId).set({ progress: 20, message: 'Video downloaded', updatedAt: Date.now() }, { merge: true })
+    const tmpBase = (gsPath ? path.basename(gsPath) : `download-${jobId}.bin`).replace(/[^a-z0-9.\-_]/gi, '_')
+    const localIn = path.resolve(tmpDir, `${jobId}-${tmpBase}`)
+
+    if (downloadURL) {
+      console.log(`[jobs:${jobId}] Input source: downloadURL`)
+      await new Promise((resolve, reject) => {
+        try {
+          const u = new URL(downloadURL)
+          const lib = u.protocol === 'https:' ? require('https') : require('http')
+          const req = lib.get(u, (res) => {
+            if (!res.statusCode || res.statusCode >= 400) return reject(new Error(`Failed to fetch ${downloadURL}: status ${res.statusCode}`))
+            const fileStream = fs.createWriteStream(localIn)
+            res.pipe(fileStream)
+            fileStream.on('finish', () => resolve())
+            fileStream.on('error', reject)
+          })
+          req.on('error', reject)
+        } catch (err) {
+          return reject(err)
+        }
+      })
+      await db.collection('jobs').doc(jobId).set({ progress: 10, message: 'Downloaded input (from URL)', updatedAt: Date.now() }, { merge: true })
+    } else if (gsPath) {
+      console.log(`[jobs:${jobId}] Input source: gsUri`)
+      // Support gs://bucket/path or plain storage-relative path
+      let filePath = gsPath
+      if (gsPath.startsWith('gs://')) {
+        const without = gsPath.replace(/^gs:\/\//i, '')
+        const idx = without.indexOf('/')
+        if (idx > 0) {
+          const bucketName = without.slice(0, idx)
+          filePath = without.slice(idx + 1)
+          const otherBucket = admin.storage().bucket(bucketName)
+          const remoteFile = otherBucket.file(filePath)
+          const [exists] = await remoteFile.exists()
+          if (!exists) {
+            console.error(`[jobs:${jobId}] Source file not found: ${gsPath}`)
+            await db.collection('jobs').doc(jobId).set({ status: 'failed', progress: 0, message: 'Source file not found', error: 'Source file missing', updatedAt: Date.now() }, { merge: true })
+            return
+          }
+          await remoteFile.download({ destination: localIn })
+        } else {
+          console.error(`[jobs:${jobId}] Invalid gs:// URI: ${gsPath}`)
+          await db.collection('jobs').doc(jobId).set({ status: 'failed', progress: 0, message: 'Invalid gsUri', error: 'Invalid gsUri', updatedAt: Date.now() }, { merge: true })
+          return
+        }
+      } else {
+        const remoteFile = bucket.file(filePath)
+        const [exists] = await remoteFile.exists()
+        if (!exists) {
+          console.error(`[jobs:${jobId}] Source file not found: ${filePath}`)
+          await db.collection('jobs').doc(jobId).set({ status: 'failed', progress: 0, message: 'Source file not found', error: 'Source file missing', updatedAt: Date.now() }, { merge: true })
+          return
+        }
+        await remoteFile.download({ destination: localIn })
+      }
+      await db.collection('jobs').doc(jobId).set({ progress: 10, message: 'Downloaded input', updatedAt: Date.now() }, { merge: true })
+    } else {
+      console.error(`[jobs:${jobId}] No input source provided`)
+      await db.collection('jobs').doc(jobId).set({ status: 'failed', progress: 0, message: 'No input source', error: 'Missing input', updatedAt: Date.now() }, { merge: true })
+      return
+    }
 
     // Run ffmpeg
     const tmpOutDir = path.resolve(process.cwd(), 'tmp', 'renders')
@@ -104,15 +169,17 @@ router.post('/', (req, res) => {
     console.log('[jobs] req.body typeof:', typeof req.body, 'body:', req.body)
 
     const body = req.body || {}
-    const { path: objectPath, filename, contentType } = body
+    const { storagePath, gsUri, downloadURL, path: objectPath, filename, contentType } = body
 
     // Validate and echo what was received for clearer errors
-    if (!path || !filename || !contentType) {
-      return res.status(400).json({ ok: false, error: 'Missing required fields: path, filename, contentType', received: { path, filename, contentType } })
+    const receivedPath = storagePath || gsUri || objectPath || downloadURL || null
+    if (!receivedPath || !filename || !contentType) {
+      return res.status(400).json({ ok: false, error: 'Missing required fields: storagePath|gsUri|downloadURL, filename, contentType', received: { storagePath, gsUri, downloadURL, filename, contentType } })
     }
 
     const jobId = (crypto.randomUUID && crypto.randomUUID()) || `${Date.now()}-${Math.floor(Math.random() * 100000)}`
-    const job = makeJob({ id: jobId, path: objectPath, filename, contentType })
+    const canonicalPath = storagePath || gsUri || objectPath || null
+    const job = makeJob({ id: jobId, path: canonicalPath, filename, contentType })
     jobs.set(jobId, job)
     console.log(`[jobs] created ${jobId} path=${objectPath}`)
 
@@ -129,7 +196,7 @@ router.post('/', (req, res) => {
           message: 'Job queued',
           createdAt: now,
           updatedAt: now,
-          objectPathOriginal: objectPath,
+          objectPathOriginal: canonicalPath,
           filename: filename,
           contentType: contentType,
           logs: [`Job created via Express POST`],
@@ -140,9 +207,9 @@ router.post('/', (req, res) => {
     })()
 
     // Schedule processing without blocking response
-    job.inputPath = objectPath
+    job.inputSpec = { storagePath: storagePath || undefined, gsUri: gsUri || undefined, downloadURL: downloadURL || undefined }
     setImmediate(() => {
-      processVideo(jobId, job.inputPath).catch((e) => {
+      processVideo(jobId, job.inputSpec).catch((e) => {
         console.error(`[jobs:${jobId}] processVideo uncaught error:`, e)
         try { db.collection('jobs').doc(jobId).set({ status: 'failed', error: e && (e.message || String(e)), updatedAt: Date.now() }, { merge: true }) } catch (_) {}
       })

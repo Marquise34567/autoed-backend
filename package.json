@@ -6,7 +6,6 @@
     "dev": "node index.js",
     "start": "node index.js",
     "set:gcs:cors": "node scripts/set-gcs-cors.js",
-    "test:signed-put": "node scripts/test-signed-put.js",
     "e2e:run": "node scripts/e2e/upload_e2e.js"
   },
   "main": "index.js",
@@ -18,6 +17,8 @@
     "firebase-admin": "*",
     "mime-types": "*",
     "stripe": "*"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
   }
-    
 }

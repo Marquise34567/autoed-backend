@@ -100,8 +100,8 @@ export async function appendJobLog(id: string, message: string) {
 
 function sanitizeJobPatch(patch: Partial<JobRecord>) {
   const next: Partial<JobRecord> = { ...patch }
-  // Never persist signed URLs or legacy downloadUrl fields
-  if ('downloadUrl' in (next as any)) delete (next as any).downloadUrl
+  // Never persist signed URLs or legacy download URL fields
+  // Keep explicit `downloadURL` if caller included it — worker prefers it when present.
 
   // Prefer canonical finalVideoPath and avoid writing legacy objectPathOutput
   if (!next.finalVideoPath && typeof (next as any).objectPathOutput === 'string') {
@@ -131,10 +131,7 @@ function sanitizeJobRead(job: JobRecord) {
   const next: JobRecord = { ...job }
   const cleanup: Record<string, any> = {}
 
-  if (typeof (next as any).downloadUrl === 'string') {
-    delete (next as any).downloadUrl
-    cleanup.downloadUrl = admin.firestore.FieldValue.delete()
-  }
+  // Preserve any provided downloadURL/downloadUrl fields so the worker can use them.
 
   if (typeof next.objectPathOutput === 'string') {
     if (looksLikeUrl(next.objectPathOutput)) {

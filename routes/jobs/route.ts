@@ -19,15 +19,18 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json();
-    const storagePath = typeof body?.path === "string" ? body.path : null;
+    const storagePath = typeof body?.storagePath === "string" ? body.storagePath : (typeof body?.path === 'string' ? body.path : null);
     if (!storagePath) {
-      return NextResponse.json({ error: "Missing path" }, { status: 400 });
+      return NextResponse.json({ error: "Missing storagePath" }, { status: 400 });
     }
+    const downloadURL = typeof body?.downloadURL === 'string' ? body.downloadURL : null;
+    // Construct gsUri internally using configured bucket
+    const gsUri = process.env.FIREBASE_STORAGE_BUCKET ? `gs://${process.env.FIREBASE_STORAGE_BUCKET}/${storagePath}` : null;
 
     const jobId = randomUUID();
     // try to infer uid from storagePath (expect uploads/{uid}/... or {uid}/...)
-    const parts = storagePath.split('/');
-    const inferredUid = parts[0] === 'uploads' && parts[1] ? parts[1] : parts[0] || 'unknown';
+    const parts = storagePath.split('/').filter(Boolean);
+    const inferredUid = parts.length ? (parts[0] === 'uploads' && parts[1] ? parts[1] : parts[0]) : 'unknown';
 
     const job = await createJob({
       id: jobId,
@@ -37,13 +40,17 @@ export async function POST(request: Request) {
       overallEtaSec: null,
       message: 'Upload complete',
       createdAt: Date.now(),
+      // Persist canonical storage info
+      storagePath: storagePath,
+      gsUri: gsUri,
+      downloadURL: downloadURL || null,
       objectPathOriginal: storagePath,
       logs: [`Created job for ${storagePath}`],
     } as any);
 
     // Start async pipeline in background; return jobId immediately so client can poll
     try {
-      processVideo(jobId, storagePath).catch((e) => {
+      processVideo(jobId, { storagePath, gsUri, downloadURL }).catch((e) => {
         console.error(`[jobs:${jobId}] processVideo uncaught error:`, e)
         appendJobLog(jobId, `processVideo uncaught error: ${e?.message || String(e)}`)
       })

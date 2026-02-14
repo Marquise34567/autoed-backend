@@ -103,19 +103,11 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "File not found" }, { status: 404 });
     }
 
-    const expiresAt = new Date(Date.now() + SIGNED_URL_TTL_MS);
-    const [signedUrl] = await file.getSignedUrl({
-      version: "v4",
-      action: "read",
-      expires: expiresAt,
-    });
-
-    const response = NextResponse.json(
-      { url: signedUrl, expiresAt: expiresAt.toISOString() },
-      { status: 200 }
-    );
-    response.headers.set("Cache-Control", "no-store");
-    return response;
+      // Signed URLs are disabled. Return the storage path so clients can use the
+      // Firebase client SDK to download the file directly from Storage.
+      const response = NextResponse.json({ storagePath: finalVideoPath }, { status: 200 });
+      response.headers.set("Cache-Control", "no-store");
+      return response;
   } catch (err: any) {
     if (err instanceof Response) return err;
     return NextResponse.json(

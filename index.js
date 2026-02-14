@@ -319,13 +319,8 @@ app.use('/api/ping', require('./routes/ping'))
 app.use("/api/jobs", require("./routes/jobs"))
 app.use('/api/job-status', require('./routes/job-status'))
 app.use('/api/userdoc', require('./routes/userdoc'))
-app.use('/api/upload-url', require('./routes/upload-url'))
-// Debug routes for validating signed URL behavior
-try {
-  app.use('/api/debug', require('./routes/debug/signed-put-test'))
-} catch (e) {
-  console.warn('[debug routes] failed to mount debug routes', e && e.message ? e.message : e)
-}
+// Signed-upload endpoints removed to enforce client-side Firebase SDK uploads.
+// Debug routes removed (signed URL debug endpoints disabled)
 
 // Lightweight ffmpeg availability check (useful to verify Railway runtime)
 try {
@@ -349,64 +344,7 @@ app.get('/api/jobs', (req, res) => {
 
 // Top-level POST fallback for /api/upload-url to guard against missing mounted router
 // This runs after mounts, so if the mounted router exists it will handle the POST.
-app.post('/api/upload-url', (req, res) => {
-  ;(async () => {
-    try {
-      const { fileName, contentType, filename, enforceContentType } = req.body || {}
-      const finalName = fileName || filename
-      if (!finalName) return res.status(400).json({ ok: false, error: 'Missing fileName' })
-
-      // Use @google-cloud/storage directly to sign URLs (avoid firebase-admin signed headers)
-      let serviceAccount = null
-      try {
-        const saEnv = process.env.FIREBASE_SERVICE_ACCOUNT_JSON || process.env.FIREBASE_SERVICE_ACCOUNT
-        if (saEnv) {
-          let raw = saEnv.trim()
-          const fs = require('fs')
-          if (!raw.startsWith('{') && fs.existsSync(raw)) raw = fs.readFileSync(raw, 'utf8')
-          serviceAccount = JSON.parse(raw)
-          if (serviceAccount.private_key) serviceAccount.private_key = String(serviceAccount.private_key).replace(/\\n/g, '\n')
-        }
-      } catch (e) {
-        console.warn('[upload-url fallback] failed to parse service account')
-      }
-
-      try {
-        const bucketName = process.env.FIREBASE_STORAGE_BUCKET
-        if (!bucketName) return res.status(500).json({ ok: false, error: 'FIREBASE_STORAGE_BUCKET is not set' })
-        if (!serviceAccount) return res.status(500).json({ ok: false, error: 'Service account not configured for signing URLs' })
-        const { Storage } = require('@google-cloud/storage')
-        const storage = new Storage({ credentials: serviceAccount })
-        const bucket = storage.bucket(bucketName)
-        const safeFilename = String(finalName).replace(/[^a-zA-Z0-9._-]/g, '_')
-        const destPath = `uploads/${Date.now()}-${safeFilename}`
-        const file = bucket.file(destPath)
-        const expiresAt = Date.now() + 15 * 60 * 1000
-
-        // Sign URL including Content-Type if provided so browser PUT can include it
-        const ct = (req.body && (req.body.contentType || req.body.contenttype)) || 'application/octet-stream'
-        const [signedUrl] = await file.getSignedUrl({ version: 'v4', action: 'write', expires: expiresAt, contentType: ct })
-        try {
-          const u = new URL(signedUrl)
-          console.log('[upload-url fallback] signedUrl generated:', { path: destPath, bucket: bucket.name, 'X-Goog-SignedHeaders': u.searchParams.get('X-Goog-SignedHeaders'), 'X-Goog-Signature': u.searchParams.get('X-Goog-Signature') ? 'present' : 'missing' })
-        } catch (e) {
-          console.log('[upload-url fallback] signedUrl generated')
-        }
-        if (!signedUrl || typeof signedUrl !== 'string') {
-          console.error('[upload-url fallback] signedUrl is invalid', { path: destPath, bucket: bucket.name })
-          return res.status(500).json({ error: 'SIGNED_URL_FAILED', details: 'signedUrl undefined' })
-        }
-        return res.status(200).json({ uploadUrl: signedUrl, filePath: destPath, expiresAt, publicUrl: null })
-      } catch (err) {
-        console.error('[upload-url fallback] firebase error:', err && (err.message || err))
-        return res.status(500).json({ ok: false, error: 'Failed to generate signed URL', details: err && err.message ? err.message : String(err) })
-      }
-    } catch (err) {
-      console.error('[upload-url fallback] handler error', err && (err.stack || err.message || err))
-      return res.status(500).json({ ok: false, error: 'Internal server error', details: err && err.message ? err.message : String(err) })
-    }
-  })()
-})
+// Signed-upload endpoints removed to enforce client-side Firebase SDK uploads.
 
 // Return JSON for missing API routes instead of HTML
 app.use((req, res, next) => {

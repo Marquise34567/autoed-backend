@@ -1,12 +1,16 @@
 import path from 'path'
 import fs from 'fs'
+import http from 'http'
+import https from 'https'
 import { getBucket } from '@/lib/firebaseAdmin'
 import normalizeToMp4 from '@/lib/ffmpeg/normalize'
 import { probeDurationSec, detectSilenceSegments, selectBoringCuts, analyzeVideo } from '@/lib/videoAnalysis'
 import { renderEditedVideo } from '@/lib/ffmpeg/renderEdited'
 import { updateJob, appendJobLog } from './jobs'
 
-export async function processVideo(jobId: string, storagePath: string) {
+type InputSpec = string | { storagePath?: string; gsUri?: string; downloadURL?: string }
+
+export async function processVideo(jobId: string, input: InputSpec) {
   console.log(`[jobsProcessor:${jobId}] Processing started`)
   try {
     await updateJob(jobId, { status: 'processing', progress: 0, phase: 'NORMALIZING', message: 'Processing started' })
@@ -23,25 +27,89 @@ export async function processVideo(jobId: string, storagePath: string) {
       return
     }
 
-    // check existence
-    const remoteFile = bucket.file(storagePath)
-    const [exists] = await remoteFile.exists()
-    if (!exists) {
-      console.error(`[jobsProcessor:${jobId}] Source file not found: ${storagePath}`)
-      await updateJob(jobId, { status: 'error', progress: 0, phase: 'ERROR', message: 'Source file not found', error: 'Source file missing' })
-      appendJobLog(jobId, `Source file not found: ${storagePath}`)
-      return
+    // Determine input source. Prefer downloadURL, then gsUri/storagePath.
+    let downloadURL: string | null = null
+    let gsPath: string | null = null
+    if (typeof input === 'string') {
+      gsPath = input
+    } else {
+      downloadURL = (input as any).downloadURL || (input as any).downloadUrl || null
+      gsPath = (input as any).storagePath || (input as any).gsUri || null
     }
 
     const uploadDir = path.resolve(process.cwd(), 'tmp', 'uploads')
     fs.mkdirSync(uploadDir, { recursive: true })
-    const safeName = path.basename(storagePath).replace(/[^a-z0-9.\-_]/gi, '_')
-    const tmpInput = path.resolve(uploadDir, `${jobId}-${safeName}`)
+    const tmpBaseName = (gsPath ? path.basename(gsPath) : `download-${jobId}.bin`).replace(/[^a-z0-9.\-_]/gi, '_')
+    const tmpInput = path.resolve(uploadDir, `${jobId}-${tmpBaseName}`)
 
-    console.log(`[jobsProcessor:${jobId}] Downloading video`)
-    appendJobLog(jobId, `Downloading ${storagePath} to ${tmpInput}`)
-    await remoteFile.download({ destination: tmpInput })
-    await updateJob(jobId, { progress: 10, message: 'Downloaded input' })
+    if (downloadURL) {
+      console.log(`[jobsProcessor:${jobId}] Input source: downloadURL (${downloadURL})`)
+      appendJobLog(jobId, `Downloading from downloadURL to ${tmpInput}`)
+      await new Promise<void>((resolve, reject) => {
+        try {
+          const u = new URL(downloadURL as string)
+          const lib = u.protocol === 'https:' ? https : http
+          const req = lib.get(u, (res) => {
+            if (!res.statusCode || res.statusCode >= 400) return reject(new Error(`Failed to fetch ${downloadURL}: status ${res.statusCode}`))
+            const fileStream = fs.createWriteStream(tmpInput)
+            res.pipe(fileStream)
+            fileStream.on('finish', () => resolve())
+            fileStream.on('error', (err) => reject(err))
+          })
+          req.on('error', reject)
+        } catch (err) {
+          return reject(err)
+        }
+      })
+      await updateJob(jobId, { progress: 10, message: 'Downloaded input (from URL)' })
+    } else if (gsPath) {
+      console.log(`[jobsProcessor:${jobId}] Input source: gsUri`)
+      appendJobLog(jobId, `Downloading ${gsPath} to ${tmpInput}`)
+
+      // Support gs://bucket/path or plain storage-relative path
+      let filePath = gsPath
+      if (gsPath.startsWith('gs://')) {
+        const without = gsPath.replace(/^gs:\/\//i, '')
+        const idx = without.indexOf('/')
+        if (idx > 0) {
+          const bucketName = without.slice(0, idx)
+          filePath = without.slice(idx + 1)
+          const otherBucket = getBucket(bucketName)
+          const remoteFile = otherBucket.file(filePath)
+          const [exists] = await remoteFile.exists()
+          if (!exists) {
+            console.error(`[jobsProcessor:${jobId}] Source file not found: ${gsPath}`)
+            await updateJob(jobId, { status: 'error', progress: 0, phase: 'ERROR', message: 'Source file not found', error: 'Source file missing' })
+            appendJobLog(jobId, `Source file not found: ${gsPath}`)
+            return
+          }
+          await remoteFile.download({ destination: tmpInput })
+          await updateJob(jobId, { progress: 10, message: 'Downloaded input' })
+        } else {
+          console.error(`[jobsProcessor:${jobId}] Invalid gs:// URI: ${gsPath}`)
+          await updateJob(jobId, { status: 'error', progress: 0, phase: 'ERROR', message: 'Invalid gsUri', error: 'Invalid gsUri' })
+          appendJobLog(jobId, `Invalid gsUri: ${gsPath}`)
+          return
+        }
+      } else {
+        const remoteFile = bucket.file(filePath)
+        const [exists] = await remoteFile.exists()
+        if (!exists) {
+          console.error(`[jobsProcessor:${jobId}] Source file not found: ${filePath}`)
+          await updateJob(jobId, { status: 'error', progress: 0, phase: 'ERROR', message: 'Source file not found', error: 'Source file missing' })
+          appendJobLog(jobId, `Source file not found: ${filePath}`)
+          return
+        }
+        const safeName = path.basename(filePath).replace(/[^a-z0-9.\-_]/gi, '_')
+        await remoteFile.download({ destination: tmpInput })
+        await updateJob(jobId, { progress: 10, message: 'Downloaded input' })
+      }
+    } else {
+      console.error(`[jobsProcessor:${jobId}] No input source provided`)
+      await updateJob(jobId, { status: 'error', progress: 0, phase: 'ERROR', message: 'No input source', error: 'Missing input' })
+      appendJobLog(jobId, 'No input source specified; aborting')
+      return
+    }
 
     console.log(`[jobsProcessor:${jobId}] Running ffmpeg (normalize)`)
     await updateJob(jobId, { progress: 20, message: 'Normalizing input' })
