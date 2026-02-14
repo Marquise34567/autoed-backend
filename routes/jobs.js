@@ -231,7 +231,7 @@ router.get('/:id/download', async (req, res) => {
 
     try {
       const url = await getSignedUrlForPath(filePath, 60)
-      return res.json({ downloadUrl: url })
+      return res.redirect(url)
     } catch (err) {
       // If object not found, surface 404 with expected path
       const msg = err && err.message ? err.message : String(err)
