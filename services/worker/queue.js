@@ -20,7 +20,7 @@ async function processNext() {
     log('Dequeued', jobId)
     // mark processing
     if (db) {
-      await db.collection('jobs').doc(jobId).set({ status: 'processing', progress: 0, message: 'Processing started', updatedAt: Date.now() }, { merge: true })
+      await db.collection('jobs').doc(jobId).set({ status: 'PROCESSING', progress: 0, message: 'Processing started', updatedAt: Date.now() }, { merge: true })
     }
     // call the worker
     await processJob(jobId, inputSpec)
@@ -28,14 +28,14 @@ async function processNext() {
     if (db) {
       const snap = await db.collection('jobs').doc(jobId).get()
       const data = snap.exists ? snap.data() : null
-      if (data && data.status !== 'done' && data.status !== 'error') {
-        await db.collection('jobs').doc(jobId).set({ status: 'done', progress: 100, updatedAt: Date.now(), message: 'Completed by queue' }, { merge: true })
+      if (data && data.status !== 'COMPLETE' && data.status !== 'FAILED') {
+        await db.collection('jobs').doc(jobId).set({ status: 'COMPLETE', progress: 100, updatedAt: Date.now(), message: 'Completed by queue' }, { merge: true })
       }
     }
   } catch (err) {
     log('Error processing', jobId, err && (err.stack || err.message || err))
     try {
-      if (db) await db.collection('jobs').doc(jobId).set({ status: 'error', progress: 0, error: err && (err.message || String(err)), updatedAt: Date.now() }, { merge: true })
+      if (db) await db.collection('jobs').doc(jobId).set({ status: 'FAILED', progress: 0, errorMessage: err && (err.message || String(err)), updatedAt: Date.now() }, { merge: true })
     } catch (e) { log('failed to mark job error', e) }
   } finally {
     isProcessing = false

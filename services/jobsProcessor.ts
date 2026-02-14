@@ -13,7 +13,7 @@ type InputSpec = string | { storagePath?: string; gsUri?: string; downloadURL?: 
 export async function processVideo(jobId: string, input: InputSpec) {
   console.log(`[jobsProcessor:${jobId}] Processing started`)
   try {
-    await updateJob(jobId, { status: 'processing', progress: 0, phase: 'NORMALIZING', message: 'Processing started' })
+    await updateJob(jobId, { status: 'PROCESSING', progress: 0, phase: 'NORMALIZING', message: 'Processing started' })
     appendJobLog(jobId, 'Processing started')
 
     // Ensure bucket available
@@ -22,7 +22,7 @@ export async function processVideo(jobId: string, input: InputSpec) {
       bucket = getBucket()
     } catch (e: any) {
       console.error(`[jobsProcessor:${jobId}] Storage bucket not configured`, e)
-      await updateJob(jobId, { status: 'error', progress: 0, phase: 'ERROR', message: 'Storage not configured', error: 'FIREBASE_STORAGE_BUCKET missing' })
+      await updateJob(jobId, { status: 'FAILED', progress: 0, phase: 'ERROR', message: 'Storage not configured', errorMessage: 'FIREBASE_STORAGE_BUCKET missing' })
       appendJobLog(jobId, 'Storage bucket missing; aborting')
       return
     }
@@ -79,7 +79,7 @@ export async function processVideo(jobId: string, input: InputSpec) {
           const [exists] = await remoteFile.exists()
           if (!exists) {
             console.error(`[jobsProcessor:${jobId}] Source file not found: ${gsPath}`)
-            await updateJob(jobId, { status: 'error', progress: 0, phase: 'ERROR', message: 'Source file not found', error: 'Source file missing' })
+            await updateJob(jobId, { status: 'FAILED', progress: 0, phase: 'ERROR', message: 'Source file not found', errorMessage: 'Source file missing' })
             appendJobLog(jobId, `Source file not found: ${gsPath}`)
             return
           }
@@ -87,7 +87,7 @@ export async function processVideo(jobId: string, input: InputSpec) {
           await updateJob(jobId, { progress: 10, message: 'Downloaded input' })
         } else {
           console.error(`[jobsProcessor:${jobId}] Invalid gs:// URI: ${gsPath}`)
-          await updateJob(jobId, { status: 'error', progress: 0, phase: 'ERROR', message: 'Invalid gsUri', error: 'Invalid gsUri' })
+          await updateJob(jobId, { status: 'FAILED', progress: 0, phase: 'ERROR', message: 'Invalid gsUri', errorMessage: 'Invalid gsUri' })
           appendJobLog(jobId, `Invalid gsUri: ${gsPath}`)
           return
         }
@@ -96,7 +96,7 @@ export async function processVideo(jobId: string, input: InputSpec) {
         const [exists] = await remoteFile.exists()
         if (!exists) {
           console.error(`[jobsProcessor:${jobId}] Source file not found: ${filePath}`)
-          await updateJob(jobId, { status: 'error', progress: 0, phase: 'ERROR', message: 'Source file not found', error: 'Source file missing' })
+          await updateJob(jobId, { status: 'FAILED', progress: 0, phase: 'ERROR', message: 'Source file not found', errorMessage: 'Source file missing' })
           appendJobLog(jobId, `Source file not found: ${filePath}`)
           return
         }
@@ -106,7 +106,7 @@ export async function processVideo(jobId: string, input: InputSpec) {
       }
     } else {
       console.error(`[jobsProcessor:${jobId}] No input source provided`)
-      await updateJob(jobId, { status: 'error', progress: 0, phase: 'ERROR', message: 'No input source', error: 'Missing input' })
+      await updateJob(jobId, { status: 'FAILED', progress: 0, phase: 'ERROR', message: 'No input source', errorMessage: 'Missing input' })
       appendJobLog(jobId, 'No input source specified; aborting')
       return
     }
@@ -117,7 +117,7 @@ export async function processVideo(jobId: string, input: InputSpec) {
     const normRes = await normalizeToMp4(tmpInput, normalizedLocal, jobId)
     if (!normRes || !normRes.success) {
       console.error(`[jobsProcessor:${jobId}] Normalization failed`, normRes)
-      await updateJob(jobId, { status: 'error', progress: 0, phase: 'ERROR', message: 'Normalization failed', error: normRes?.error || 'Normalization failed' })
+      await updateJob(jobId, { status: 'FAILED', progress: 0, phase: 'ERROR', message: 'Normalization failed', errorMessage: normRes?.error || 'Normalization failed' })
       appendJobLog(jobId, `Normalization failed: ${JSON.stringify(normRes).slice(0,200)}`)
       return
     }
@@ -158,7 +158,7 @@ export async function processVideo(jobId: string, input: InputSpec) {
     await finalFile.save(fs.readFileSync(renderLocal), { resumable: false, contentType: 'video/mp4' })
     appendJobLog(jobId, `Uploaded final to ${finalPath}`)
 
-    await updateJob(jobId, { status: 'completed', progress: 100, phase: 'DONE', message: 'Job completed', finalVideoPath: finalPath })
+    await updateJob(jobId, { status: 'COMPLETE', progress: 100, phase: 'DONE', message: 'Job completed', finalVideoPath: finalPath })
     appendJobLog(jobId, 'Job completed')
     console.log(`[jobsProcessor:${jobId}] Job completed`)
 
@@ -169,7 +169,7 @@ export async function processVideo(jobId: string, input: InputSpec) {
   } catch (err: any) {
     console.error(`[jobsProcessor:${jobId}] Unhandled processing error:`, err && (err.stack || err.message || err))
     appendJobLog(jobId, `Processing exception: ${err?.message || String(err)}`)
-    await updateJob(jobId, { status: 'error', progress: 0, phase: 'ERROR', message: 'Processing failed', error: err?.message || String(err) })
+    await updateJob(jobId, { status: 'FAILED', progress: 0, phase: 'ERROR', message: 'Processing failed', errorMessage: err?.message || String(err) })
   }
 }
 

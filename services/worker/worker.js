@@ -20,7 +20,7 @@ function log(jobId, ...args) {
 async function claimOne() {
   if (!db) return null
   // Find one queued job
-  const q = await db.collection('jobs').where('status', '==', 'queued').orderBy('createdAt', 'asc').limit(1).get()
+  const q = await db.collection('jobs').where('status', '==', 'QUEUED').orderBy('createdAt', 'asc').limit(1).get()
   if (q.empty) return null
   const doc = q.docs[0]
   const ref = doc.ref
@@ -30,7 +30,7 @@ async function claimOne() {
       const data = snap.exists ? snap.data() : null
       if (!data) return null
       if (data.status && data.status !== 'queued') return null
-      tx.update(ref, { status: 'processing', progress: 0, startedAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: Date.now() })
+      tx.update(ref, { status: 'PROCESSING', progress: 0, startedAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: Date.now() })
       return { id: ref.id, data }
     })
     return claimed
@@ -70,7 +70,7 @@ async function workerLoop() {
         log(jobId, 'processing finished')
       } catch (e) {
         log(jobId, 'processing error', e && (e.message || e))
-        try { await db.collection('jobs').doc(jobId).set({ status: 'error', progress: 0, error: e && (e.message || String(e)), updatedAt: Date.now() }, { merge: true }) } catch (er) { log(jobId, 'failed to write error state', er) }
+        try { await db.collection('jobs').doc(jobId).set({ status: 'FAILED', progress: 0, errorMessage: e && (e.message || String(e)), updatedAt: Date.now() }, { merge: true }) } catch (er) { log(jobId, 'failed to write error state', er) }
       }
     } catch (err) {
       log(null, 'worker loop error', err && (err.stack || err.message || err))
