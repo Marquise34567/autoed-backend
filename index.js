@@ -39,7 +39,7 @@ app.use(
 )
 
 // Ensure preflight requests are handled
-app.options('*', cors())
+app.options(/.*/, cors())
 
 // Log CORS origin on every request for deploy verification
 app.use((req, res, next) => {
