@@ -6,6 +6,7 @@ const path = require('path')
 const { exec } = require('child_process')
 const admin = require('../utils/firebaseAdmin')
 const { processJob } = require('../services/worker/processJob')
+const { enqueue, reenqueue, listQueued } = require('../services/worker/queue')
 const db = admin.db
 
 async function processVideo(jobId, inputSpec) {
@@ -149,25 +150,69 @@ router.get('/', (req, res) => {
   return res.status(200).json({ ok: true, jobs: arr })
 })
 
-// Get single job by id, create placeholder if missing
+// Get single job by id or list all
+router.get('/', (req, res) => {
+  ;(async () => {
+    try {
+      const qid = req.query.id || null
+      if (qid) {
+        if (db) {
+          const snap = await db.collection('jobs').doc(qid).get()
+          if (snap && snap.exists) return res.status(200).json({ ok: true, job: snap.data() })
+        }
+        const job = jobs.get(qid) || null
+        return res.status(200).json({ ok: true, jobId, received: { storagePath, downloadURL, filename: body.filename, contentType: body.contentType } })
+      }
+
+      // list all — prefer Firestore collection if available
+      if (db) {
+        const snaps = await db.collection('jobs').orderBy('createdAt', 'desc').limit(100).get()
+
+    // Retry endpoint to re-enqueue a job
+    router.post('/:id/retry', (req, res) => {
+      const id = req.params.id
+      if (!id) return res.status(400).json({ ok: false, error: 'Missing id' })
+      ;(async () => {
+        try {
+          // fetch inputSpec from Firestore
+          if (!db) return res.status(500).json({ ok: false, error: 'Firestore not available' })
+          const snap = await db.collection('jobs').doc(id).get()
+          if (!snap.exists) return res.status(404).json({ ok: false, error: 'Job not found' })
+          const data = snap.data()
+          await db.collection('jobs').doc(id).set({ status: 'queued', progress: 0, message: 'Re-queued', updatedAt: Date.now() }, { merge: true })
+          reenqueue(id, data.inputSpec || {})
+          console.log('Re-enqueued', id)
+          return res.status(200).json({ ok: true, jobId: id })
+        } catch (e) {
+          console.error('[jobs] retry error', e)
+          return res.status(500).json({ ok: false, error: e && e.message ? e.message : String(e) })
+        }
+      })()
+    })
+        const arr = []
+        snaps.forEach(s => arr.push(s.data()))
+        return res.status(200).json({ ok: true, jobs: arr, queued: listQueued() })
+      }
+      const arr = Array.from(jobs.values())
+      return res.status(200).json({ ok: true, jobs: arr, queued: listQueued() })
+    } catch (e) {
+      console.error('[jobs] GET error', e)
+      return res.status(500).json({ ok: false, error: e && e.message ? e.message : String(e) })
+    }
+  })()
+})
+
+// Get single job by id path for backward compatibility
 router.get('/:id', (req, res) => {
   const id = req.params.id
   if (!id) return res.status(400).json({ ok: false, error: 'Missing id' })
   ;(async () => {
     try {
-      // Prefer Firestore job status if available
       if (db) {
         const snap = await db.collection('jobs').doc(id).get()
-        if (snap && snap.exists) {
-          return res.status(200).json({ ok: true, job: snap.data() })
-        }
+        if (snap && snap.exists) return res.status(200).json({ ok: true, job: snap.data() })
       }
-      let job = jobs.get(id)
-      if (!job) {
-        job = makeJob({ id })
-        jobs.set(id, job)
-        console.log(`[jobs] created ${id} path=${job.path}`)
-      }
+      const job = jobs.get(id) || null
       return res.status(200).json({ ok: true, job })
     } catch (e) {
       console.error('[jobs] GET /:id error', e)
@@ -206,39 +251,45 @@ router.post('/', (req, res) => {
     console.log(`JOB CREATED ${jobId} path=${objectPath}`)
 
     // Persist a Firestore job document so other clients can observe progress
-    ;(async () => {
-      try {
-        const now = new Date().getTime()
-        await db.collection('jobs').doc(jobId).set({
-          id: jobId,
-          uid: null,
-          phase: 'QUEUED',
-          status: 'queued',
-          progress: 0,
-          message: 'Job queued',
-          createdAt: now,
-          updatedAt: now,
-          objectPathOriginal: canonicalPath,
-          logs: [`Job created via Express POST`],
-        }, { merge: true })
-      } catch (e) {
-        console.error('[jobs] failed to persist job to Firestore', e)
+    try {
+      const now = new Date().getTime()
+      const inputSpec = {
+        storagePath: storagePath || undefined,
+        gsUri: incomingGsUri || (storagePath && (admin.getBucketName ? `gs://${admin.getBucketName()}/${storagePath}` : null)) || undefined,
+        downloadURL: downloadURL || undefined,
+        filename: body.filename || undefined,
+        contentType: body.contentType || undefined,
       }
-    })()
+      await db.collection('jobs').doc(jobId).set({
+        id: jobId,
+        uid: null,
+        phase: 'QUEUED',
+        status: 'queued',
+        progress: 0,
+        message: 'Job queued',
+        createdAt: now,
+        updatedAt: now,
+        inputSpec: inputSpec,
+        objectPathOriginal: canonicalPath,
+        logs: [`Job created via Express POST`],
+      }, { merge: true })
 
-    // Schedule processing without blocking response
-    // Prepare inputSpec for background processing. Prefer a canonical gsUri when available.
-    const gsUri = incomingGsUri || (storagePath && (admin.getBucketName ? `gs://${admin.getBucketName()}/${storagePath}` : null)) || undefined
-    job.inputSpec = { storagePath: storagePath || undefined, gsUri: gsUri || undefined, downloadURL: downloadURL || undefined }
-    setImmediate(() => {
-      console.log(`JOB START ${jobId}`)
-      processJob(jobId, job.inputSpec).catch((e) => {
-        console.error(`JOB ERROR ${jobId}`, e)
-        try { db.collection('jobs').doc(jobId).set({ status: 'error', error: e && (e.message || String(e)), updatedAt: Date.now() }, { merge: true }) } catch (_) {}
-      })
-    })
+      // attach to in-memory job as well
+      job.inputSpec = inputSpec
+    } catch (e) {
+      console.error('[jobs] failed to persist job to Firestore', e)
+    }
 
-    return res.status(200).json({ ok: true, jobId })
+    // Enqueue the job for in-process execution
+    try {
+      enqueue(jobId, job.inputSpec)
+      console.log(`Enqueued ${jobId}`)
+    } catch (e) {
+      console.error('[jobs] failed to enqueue', e)
+    }
+
+    console.log(`Job created ${jobId}`)
+    return res.status(200).json({ ok: true, jobId, received: { storagePath, downloadURL, filename: body.filename, contentType: body.contentType } })
   } catch (err) {
     console.error('[jobs] POST error', err && err.message ? err.message : err)
     return res.status(500).json({ ok: false, error: err && err.message ? err.message : 'Internal error' })
