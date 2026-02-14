@@ -211,77 +211,61 @@ router.post('/:id/retry', async (req, res) => {
 // Create a job
 router.post('/', async (req, res) => {
   try {
-    // Debug logging to help verify incoming requests (one-time per deploy is fine)
-    console.log('[jobs] req.headers content-type:', req.headers['content-type'])
-    console.log('[jobs] req.body typeof:', typeof req.body, 'body:', req.body)
-
+    console.log('[jobs] POST incoming')
     const body = req.body || {}
-    const { storagePath, gsUri: incomingGsUri, downloadURL, path: objectPath } = body
+    const { storagePath, gsUri, downloadURL, filename, contentType } = body
 
-    // Accept any one of: storagePath OR gsUri OR downloadURL
-    const receivedPath = storagePath || incomingGsUri || objectPath || downloadURL || null
-    if (!receivedPath) {
-      return res.status(400).json({ ok: false, error: 'Missing required fields: storagePath|gsUri|downloadURL', received: { storagePath, gsUri: incomingGsUri, downloadURL } })
+    // REQUIRE storagePath to match frontend behavior
+    if (!storagePath) {
+      return res.status(400).json({ ok: false, error: 'Missing required field: storagePath' })
     }
 
     const jobId = (crypto.randomUUID && crypto.randomUUID()) || `${Date.now()}-${Math.floor(Math.random() * 100000)}`
-    // Normalize to a canonical gs:// URI when possible
-    let canonicalPath = incomingGsUri || null
-    if (!canonicalPath && storagePath) {
-      const bn = admin.getBucketName && admin.getBucketName()
-      if (bn) canonicalPath = `gs://${bn}/${storagePath}`
-      else canonicalPath = storagePath
-    }
-    if (!canonicalPath && objectPath) canonicalPath = objectPath
-    const job = makeJob({ id: jobId, path: canonicalPath })
-    jobs.set(jobId, job)
-    console.log(`JOB CREATED ${jobId} path=${objectPath}`)
 
-    // Persist a Firestore job document so other clients can observe progress
+    // Build canonical gsUri when possible
+    const computedGs = gsUri || (storagePath && (admin.getBucketName ? `gs://${admin.getBucketName()}/${storagePath}` : null)) || null
+
+    const inputSpec = { storagePath }
+    if (computedGs) inputSpec.gsUri = computedGs
+    if (downloadURL) inputSpec.downloadURL = downloadURL
+
+    // Persist job to Firestore
     try {
-      const now = new Date().getTime()
-      // Build inputSpec without undefined values to satisfy Firestore
-      const inputSpec = {}
-      if (storagePath) inputSpec.storagePath = storagePath
-      const computedGs = incomingGsUri || (storagePath && (admin.getBucketName ? `gs://${admin.getBucketName()}/${storagePath}` : null)) || null
-      if (computedGs) inputSpec.gsUri = computedGs
-      if (downloadURL) inputSpec.downloadURL = downloadURL
-      if (body.filename) inputSpec.filename = body.filename
-      if (body.contentType) inputSpec.contentType = body.contentType
-
-      // attach to in-memory job so queue has the spec even if Firestore write fails
-      job.inputSpec = inputSpec
-
+      const now = admin.firestore.FieldValue.serverTimestamp()
       await db.collection('jobs').doc(jobId).set({
         id: jobId,
         uid: null,
-        phase: 'QUEUED',
         status: 'queued',
         progress: 0,
-        message: 'Job queued',
         createdAt: now,
         updatedAt: now,
-        inputSpec: inputSpec,
-        objectPathOriginal: canonicalPath,
-        logs: [`Job created via Express POST`],
+        inputSpec,
+        filename: filename || null,
+        contentType: contentType || null,
+        errorMessage: null,
+        result: null,
       }, { merge: true })
     } catch (e) {
-      console.error('[jobs] failed to persist job to Firestore', e)
+      console.error('[jobs] failed to persist job to Firestore', e && (e.message || e))
+      return res.status(500).json({ ok: false, error: 'Failed to persist job' })
     }
 
-    // Enqueue the job for in-process execution
+    // Attach to in-memory jobs map for local visibility and enqueue
+    const job = makeJob({ id: jobId, path: computedGs || storagePath, filename, contentType })
+    job.inputSpec = inputSpec
+    jobs.set(jobId, job)
+
     try {
-      enqueue(jobId, job.inputSpec)
-      console.log(`Enqueued ${jobId}`)
+      enqueue(jobId, inputSpec)
+      console.log(`[jobs] enqueued ${jobId}`)
     } catch (e) {
-      console.error('[jobs] failed to enqueue', e)
+      console.error('[jobs] failed to enqueue', e && (e.message || e))
     }
 
-    console.log(`Job created ${jobId}`)
-    return res.status(200).json({ ok: true, jobId, received: { storagePath, downloadURL, filename: body.filename, contentType: body.contentType } })
+    return res.status(200).json({ ok: true, jobId })
   } catch (err) {
-    console.error('[jobs] POST error', err && err.message ? err.message : err)
-    return res.status(500).json({ ok: false, error: err && err.message ? err.message : 'Internal error' })
+    console.error('[jobs] POST error', err && (err.stack || err.message || err))
+    return res.status(500).json({ ok: false, error: 'Internal server error' })
   }
 })
 

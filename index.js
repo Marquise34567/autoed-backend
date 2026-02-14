@@ -111,6 +111,14 @@ if (stripeKey && stripeKey.startsWith("sk_")) {
 
 const admin = require('./utils/firebaseAdmin')
 
+// Worker starter (starts loop when WORKER_ENABLED=true)
+let worker = null
+try {
+  worker = require('./services/worker/worker')
+} catch (e) {
+  console.warn('[startup] worker module not available', e && (e.message || e))
+}
+
 // Temporary debug endpoint to verify Firebase initialization
 app.get('/api/firebase-check', (req, res) => {
   try {
@@ -397,6 +405,14 @@ const PORT = process.env.PORT || 8080
 app.listen(PORT, '0.0.0.0', () => {
   console.log('✅ Listening on', PORT)
   logRegisteredRoutes()
+  try {
+    if (worker && typeof worker.start === 'function') {
+      worker.start()
+      console.log('[worker] start invoked from index.js')
+    }
+  } catch (e) {
+    console.error('[startup] failed to start worker', e && (e.stack || e.message || e))
+  }
 })
 // Start worker loop if enabled via env
 try {

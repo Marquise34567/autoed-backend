@@ -118,7 +118,7 @@ async function processJob(jobId, inputSpec) {
     if (storagePath) {
       try {
         const bucketName = admin.getBucketName && admin.getBucketName()
-        console.log(`[worker:${jobId}] using storagePath: ${storagePath} bucket=${bucketName}`)
+        console.log(`[worker] ${jobId} downloading using storagePath=${storagePath} bucket=${bucketName}`)
         await db.collection('jobs').doc(jobId).set({ progress: 5, message: 'Downloading from storagePath', updatedAt: Date.now() }, { merge: true })
         const bucket = admin.getBucket(bucketName)
         const remoteFile = bucket.file(storagePath)
@@ -132,23 +132,25 @@ async function processJob(jobId, inputSpec) {
           ws.on('finish', resolve)
           rs.pipe(ws)
         })
+        console.log(`[worker] ${jobId} download complete ${localIn}`)
         await db.collection('jobs').doc(jobId).set({ progress: 20, message: 'Downloaded from storagePath', updatedAt: Date.now() }, { merge: true })
         downloaded = true
       } catch (e) {
-        console.warn(`[worker:${jobId}] storagePath download failed, will try gsUri/downloadURL:`, e && (e.message || e))
+        console.warn(`[worker] ${jobId} storagePath download failed, will try gsUri/downloadURL:`, e && (e.message || e))
       }
     }
 
     // 2) gsUri (if not yet downloaded)
     if (!downloaded && gsUri) {
       try {
-        console.log(`[worker:${jobId}] using gsUri: ${gsUri}`)
+        console.log(`[worker] ${jobId} downloading using gsUri=${gsUri}`)
         await db.collection('jobs').doc(jobId).set({ progress: 5, message: 'Downloading from gsUri', updatedAt: Date.now() }, { merge: true })
         await downloadFromGs(gsUri, localIn)
+        console.log(`[worker] ${jobId} download complete ${localIn}`)
         await db.collection('jobs').doc(jobId).set({ progress: 20, message: 'Downloaded from gsUri', updatedAt: Date.now() }, { merge: true })
         downloaded = true
       } catch (e) {
-        console.warn(`[worker:${jobId}] gsUri download failed, will try downloadURL:`, e && (e.message || e))
+        console.warn(`[worker] ${jobId} gsUri download failed, will try downloadURL:`, e && (e.message || e))
       }
     }
 
@@ -158,14 +160,15 @@ async function processJob(jobId, inputSpec) {
         const containsAlt = downloadURL.includes('alt=media')
         const containsToken = downloadURL.includes('token=')
         const redacted = downloadURL.replace(/(token=)[^&]+/i, '$1<redacted>')
-        console.log(`[worker:${jobId}] attempting HTTP download (redacted): ${redacted.slice(0,120)}`)
-        console.log(`[worker:${jobId}] downloadURL contains alt=media=${containsAlt} token=${containsToken}`)
+        console.log(`[worker] ${jobId} downloading using downloadURL (redacted): ${redacted.slice(0,120)}`)
+        console.log(`[worker] ${jobId} downloadURL alt=media=${containsAlt} token=${containsToken}`)
         await db.collection('jobs').doc(jobId).set({ progress: 5, message: 'Downloading from URL', updatedAt: Date.now() }, { merge: true })
         await streamDownload(downloadURL, localIn)
+        console.log(`[worker] ${jobId} download complete ${localIn}`)
         await db.collection('jobs').doc(jobId).set({ progress: 20, message: 'Downloaded from URL', updatedAt: Date.now() }, { merge: true })
         downloaded = true
       } catch (e) {
-        console.warn(`[worker:${jobId}] HTTP download failed:`, e && (e.message || e))
+        console.warn(`[worker] ${jobId} HTTP download failed:`, e && (e.message || e))
       }
     }
 
