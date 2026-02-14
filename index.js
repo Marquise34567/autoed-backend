@@ -398,3 +398,20 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('✅ Listening on', PORT)
   logRegisteredRoutes()
 })
+// Start worker loop if enabled via env
+try {
+  const workerEnabled = String(process.env.WORKER_ENABLED || 'false').toLowerCase() === 'true'
+  if (workerEnabled) {
+    try {
+      const worker = require('./services/worker/worker')
+      worker.start()
+      console.log('[worker] worker.start() invoked')
+    } catch (e) {
+      console.warn('[worker] failed to start worker', e && e.message ? e.message : e)
+    }
+  } else {
+    console.log('[worker] WORKER_ENABLED not true; worker not started')
+  }
+} catch (e) {
+  console.warn('[worker] worker startup check failed', e && e.message ? e.message : e)
+}
