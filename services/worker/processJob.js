@@ -90,7 +90,7 @@ async function processJob(jobId, inputSpec) {
   try {
     if (!db) throw new Error('Firestore db not initialized')
 
-    await db.collection('jobs').doc(jobId).set({ status: 'processing', progress: 0, message: 'Processing started', updatedAt: Date.now() }, { merge: true })
+    await db.collection('jobs').doc(jobId).set({ status: 'PROCESSING', progress: 0, message: 'Processing started', updatedAt: Date.now() }, { merge: true })
 
     // Normalize inputSpec
     let downloadURL = null
@@ -177,6 +177,8 @@ async function processJob(jobId, inputSpec) {
     if (!downloaded) {
       throw new Error('No input source provided or download failed')
     }
+
+      console.log(`[worker:${jobId}] stage=download/start`)
 
     // Processing step: run retention-edit pipeline (transcribe -> AI plan -> trim+concat)
     console.log(`PROCESSING ${jobId}`)
@@ -381,6 +383,8 @@ async function processJob(jobId, inputSpec) {
 
     if (!merged.length) throw new Error('No segments to render after AI plan/fallback')
 
+      console.log(`[worker:${jobId}] stage=transcode`)
+
     // 3b) Ask OpenAI for zoom keyframes (strict JSON schema)
     await setStage('Adding Hooks', 50, 'Requesting zoom keyframes from AI')
     let aiZooms = null
@@ -547,6 +551,8 @@ async function processJob(jobId, inputSpec) {
     // Upload result.json first (small, quick)
     const destResultPath = `results/${jobId}/result.json`
     console.log(`JOB ${jobId} uploading result JSON to ${destResultPath}`)
+      console.log(`[worker:${jobId}] stage=upload`)
+
     let resultUrl = null
     try {
       resultUrl = await uploadToBucket(localResult, destResultPath)
@@ -576,8 +582,10 @@ async function processJob(jobId, inputSpec) {
     }
 
     // Update job doc: include output path and optionally signed URL for download
-    const jobUpdate = { status: 'done', progress: 100, updatedAt: Date.now(), message: 'Completed' }
+    const jobUpdate = { status: 'COMPLETE', progress: 100, updatedAt: Date.now(), message: 'Completed' }
     if (resultUrl) jobUpdate.resultUrl = resultUrl
+      console.log(`[worker:${jobId}] stage=finalize`)
+
     if (outputUrl) jobUpdate.outputUrl = outputUrl
     jobUpdate.outputPath = destVideoPath
     await db.collection('jobs').doc(jobId).set(jobUpdate, { merge: true })
@@ -590,7 +598,7 @@ async function processJob(jobId, inputSpec) {
   } catch (err) {
     console.error(`JOB ERROR ${jobId}`, err && (err.stack || err.message || err))
     try {
-      if (db) await db.collection('jobs').doc(jobId).set({ status: 'error', progress: 0, error: err && (err.message || String(err)), updatedAt: Date.now(), message: 'Processing error' }, { merge: true })
+      if (db) await db.collection('jobs').doc(jobId).set({ status: 'FAILED', progress: 0, errorMessage: err && (err.message || String(err)), updatedAt: Date.now(), message: 'Processing error' }, { merge: true })
     } catch (e) {
       console.error(`[worker:${jobId}] failed to write error to Firestore`, e)
     }

@@ -326,8 +326,9 @@ export async function POST(request: Request) {
           appendJobLog(jobId, `Transcription complete: ${transcript.length} segments`);
           await updateJob(jobId, { progress: 0.25 } as any);
         } catch (tErr: any) {
-          appendJobLog(jobId, `Transcription failed: ${tErr?.message || String(tErr)}`);
-          await updateJob(jobId, { status: 'error', step: 'analyze', progress: 0, error: tErr?.message || String(tErr) } as any);
+          const msg = tErr?.message || String(tErr)
+          appendJobLog(jobId, `Transcription failed: ${msg}`);
+          await updateJob(jobId, { status: 'FAILED', step: 'analyze', progress: 0, errorMessage: msg } as any);
           return;
         }
 
@@ -354,11 +355,12 @@ export async function POST(request: Request) {
         appendJobLog(jobId, 'Analysis complete');
 
         // leave job in completion state; subsequent generate step can transition
-      } catch (bgErr: any) {
+        } catch (bgErr: any) {
+        const msg = bgErr?.message || String(bgErr)
         console.error(`[analyze:${requestId}] Background analysis error:`, bgErr);
-        appendJobLog(jobId, `Background error: ${bgErr?.message || String(bgErr)}`);
+        appendJobLog(jobId, `Background error: ${msg}`);
         try {
-          await updateJob(jobId, { status: 'error', step: 'analyze', progress: 0, error: bgErr?.message || String(bgErr) } as any);
+          await updateJob(jobId, { status: 'FAILED', step: 'analyze', progress: 0, errorMessage: msg } as any);
         } catch (uErr) {
           console.error('[analyze] Failed to update job on error:', uErr);
         }
