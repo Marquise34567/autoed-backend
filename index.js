@@ -31,7 +31,8 @@ const corsOptions = {
     // Allow server-to-server requests with no Origin header
     if (!origin) return callback(null, true)
     if (allowedOrigins.includes(origin) || localhostRegex.test(origin) || vercelPreviewRegex.test(origin)) return callback(null, true)
-    return callback(new Error('Not allowed by CORS'))
+    // Indicate not allowed without raising an error so responses are still returned
+    return callback(null, false)
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
