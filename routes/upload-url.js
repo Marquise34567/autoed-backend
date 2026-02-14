@@ -73,7 +73,8 @@ router.post('/', async (req, res) => {
     const ct = contentType || 'application/octet-stream'
     // Log contentType before signing
     console.log(`[upload-url:${requestId}] getSignedUrl contentType:`, ct)
-    const [uploadUrl] = await file.getSignedUrl({ version: 'v4', action: 'write', expires: expiresAt, contentType: ct })
+    // Use EXACT value from frontend, no transformation
+    const [uploadUrl] = await file.getSignedUrl({ version: 'v4', action: 'write', expires: expiresAt, contentType: contentType || 'application/octet-stream' })
 
     // Log query params helpful for debugging SignatureDoesNotMatch
     try {

@@ -209,8 +209,9 @@ export async function POST(request: Request) {
       // Create V4 signed URL for write (PUT). Sign Content-Type so browser PUT matches.
       const contentTypeHeader = contentType || 'application/octet-stream'
       // Log contentType before signing
-      console.log(`${logPrefix} getSignedUrl contentType:`, contentTypeHeader)
-      const [uploadUrl] = await file.getSignedUrl({ version: 'v4', action: 'write', expires: expiresAt, contentType: contentTypeHeader })
+      console.log(`${logPrefix} getSignedUrl contentType:`, contentType)
+      // Use EXACT value from frontend, no transformation
+      const [uploadUrl] = await file.getSignedUrl({ version: 'v4', action: 'write', expires: expiresAt, contentType: contentType || 'application/octet-stream' })
 
       // Log query params for debugging
       try {
