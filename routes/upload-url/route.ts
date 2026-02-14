@@ -27,8 +27,10 @@ export async function POST(request: Request) {
 
   try {
     console.log(`${logPrefix} POST /api/upload-url started`)
-
     // Step 1: Check environment variables
+    if (!process.env.FIREBASE_STORAGE_BUCKET) {
+      return NextResponse.json({ ok: false, error: 'FIREBASE_STORAGE_BUCKET missing' }, { status: 500 })
+    }
     const missingEnv = getMissingEnvVars()
     if (missingEnv.length > 0) {
       console.error(`${logPrefix} Missing env vars:`, missingEnv)

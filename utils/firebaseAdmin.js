@@ -16,10 +16,9 @@ if (!admin.apps.length) {
   }
 
   try {
-    admin.initializeApp({
-      credential: admin.credential.cert(serviceAccount),
-      storageBucket: process.env.FIREBASE_STORAGE_BUCKET,
-    })
+    const initOptions = { credential: admin.credential.cert(serviceAccount) }
+    if (process.env.FIREBASE_STORAGE_BUCKET) initOptions.storageBucket = process.env.FIREBASE_STORAGE_BUCKET
+    admin.initializeApp(initOptions)
     console.log('[firebaseAdmin] initialized via FIREBASE_* environment variables')
   } catch (e) {
     console.error('[firebaseAdmin] Failed to initialize Firebase Admin SDK:', e && e.message ? e.message : e)
@@ -31,50 +30,56 @@ if (!admin.apps.length) {
 // Accept values like "my-bucket" or "gs://my-bucket/path/to/prefix".
 const rawBucket = process.env.FIREBASE_STORAGE_BUCKET
 if (!rawBucket) {
-  console.error('[firebaseAdmin] FIREBASE_STORAGE_BUCKET is not set')
-  throw new Error('FIREBASE_STORAGE_BUCKET is not set')
+  console.warn('[firebaseAdmin] FIREBASE_STORAGE_BUCKET is not set — storage features will be disabled until configured')
+} else {
+  // Normalize: strip gs:// and extract bucket name and optional prefix path
+  const normalized = rawBucket.replace(/^gs:\/\//i, '')
+  const parts = normalized.split('/')
+  var bucketName = parts.shift()
+  var bucketPrefix = parts.length ? parts.join('/').replace(/^\/|\/$/g, '') : ''
 }
 
-// Normalize: strip gs:// and extract bucket name and optional prefix path
-const normalized = rawBucket.replace(/^gs:\/\//i, '')
-const parts = normalized.split('/')
-const bucketName = parts.shift()
-const bucketPrefix = parts.length ? parts.join('/').replace(/^\/|\/$/g, '') : ''
-
-const bucket = admin.storage().bucket(bucketName)
-;(async () => {
-  try {
-    const [exists] = await bucket.exists()
-    if (!exists) {
-      // Only attempt to auto-create if explicitly requested to avoid permission/domain checks.
-      if (String(process.env.FIREBASE_AUTO_CREATE_BUCKET).toLowerCase() === 'true') {
-        console.warn(`[firebaseAdmin] Storage bucket does not exist: ${bucketName} — attempting to create`)
-        try {
-          await admin.storage().bucket(bucketName).create({
-            location: process.env.GCS_BUCKET_LOCATION || 'US',
-            storageClass: process.env.GCS_BUCKET_STORAGE_CLASS || 'STANDARD',
-          })
-          console.log(`[firebaseAdmin] Successfully created storage bucket: ${bucketName}`)
-        } catch (createErr) {
-          console.error('[firebaseAdmin] Failed to create storage bucket:', createErr && createErr.message ? createErr.message : createErr)
-          throw createErr
+let bucket = null
+if (typeof bucketName !== 'undefined' && bucketName) {
+  bucket = admin.storage().bucket(bucketName)
+  ;(async () => {
+    try {
+      const [exists] = await bucket.exists()
+      if (!exists) {
+        if (String(process.env.FIREBASE_AUTO_CREATE_BUCKET).toLowerCase() === 'true') {
+          console.warn(`[firebaseAdmin] Storage bucket does not exist: ${bucketName} — attempting to create`)
+          try {
+            await admin.storage().bucket(bucketName).create({
+              location: process.env.GCS_BUCKET_LOCATION || 'US',
+              storageClass: process.env.GCS_BUCKET_STORAGE_CLASS || 'STANDARD',
+            })
+            console.log(`[firebaseAdmin] Successfully created storage bucket: ${bucketName}`)
+          } catch (createErr) {
+            console.error('[firebaseAdmin] Failed to create storage bucket:', createErr && createErr.message ? createErr.message : createErr)
+          }
+        } else {
+          console.warn(`[firebaseAdmin] Storage bucket does not exist: ${bucketName}. To auto-create set FIREBASE_AUTO_CREATE_BUCKET=true or create the bucket manually.`)
         }
       } else {
-        console.error(`[firebaseAdmin] Storage bucket does not exist: ${bucketName}. To auto-create set FIREBASE_AUTO_CREATE_BUCKET=true or create the bucket manually.`)
-        throw new Error(`Storage bucket does not exist: ${bucketName}`)
+        console.log(`[firebaseAdmin] Storage bucket verified: ${bucketName}`)
       }
-    } else {
-      console.log(`[firebaseAdmin] Storage bucket verified: ${bucketName}`)
+    } catch (e) {
+      console.error('[firebaseAdmin] Error checking storage bucket:', e && e.message ? e.message : e)
     }
-  } catch (e) {
-    console.error('[firebaseAdmin] Error checking storage bucket:', e && e.message ? e.message : e)
-    // Re-throw to fail fast in startup
-    throw e
-  }
-})()
+  })()
+}
+
+// Startup log: indicate if bucket is configured
+console.log('[firebaseAdmin] BUCKET=' + (rawBucket ? 'SET' : 'MISSING'))
 
 // Export admin and helpers for convenience
 const db = admin.firestore()
 module.exports = admin
 module.exports.db = db
 module.exports.bucket = bucket
+module.exports.getBucket = function(name) {
+  if (!rawBucket && !name) throw new Error('FIREBASE_STORAGE_BUCKET missing')
+  if (!bucket && !name) throw new Error('FIREBASE_STORAGE_BUCKET missing')
+  if (name) return admin.storage().bucket(name)
+  return bucket
+}

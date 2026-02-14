@@ -140,6 +140,9 @@ export async function POST(request: Request) {
         }
 
           try {
+            if (!process.env.FIREBASE_STORAGE_BUCKET) {
+              return NextResponse.json({ ok: false, error: 'FIREBASE_STORAGE_BUCKET missing' }, { status: 500 })
+            }
             const bucket = getBucket()
             const file = bucket.file(body.videoPath)
             const [exists] = await file.exists()
