@@ -63,7 +63,15 @@ async function downloadFromGs(gsUriOrPath, dest) {
   const remoteFile = bucket.file(filePath)
   const [exists] = await remoteFile.exists()
   if (!exists) throw new Error('Source file not found: ' + filePath)
-  await remoteFile.download({ destination: dest })
+  // stream to destination to avoid loading entire file in memory
+  await new Promise((resolve, reject) => {
+    const rs = remoteFile.createReadStream()
+    rs.on('error', reject)
+    const ws = fs.createWriteStream(dest)
+    ws.on('error', reject)
+    ws.on('finish', resolve)
+    rs.pipe(ws)
+  })
 }
 
 async function uploadToBucket(localPath, destPath) {
@@ -103,9 +111,49 @@ async function processJob(jobId, inputSpec) {
 
     // Fetch input
     console.log(`DOWNLOADING INPUT ${jobId}`)
-    // Try downloadURL first (follow redirects). If that fails, fall back to storage.
+    // Prefer storagePath/gsUri (stream from Firebase Admin) then fall back to downloadURL
     let downloaded = false
-    if (downloadURL) {
+
+    // 1) storagePath (preferred)
+    if (storagePath) {
+      try {
+        const bucketName = admin.getBucketName && admin.getBucketName()
+        console.log(`[worker:${jobId}] using storagePath: ${storagePath} bucket=${bucketName}`)
+        await db.collection('jobs').doc(jobId).set({ progress: 5, message: 'Downloading from storagePath', updatedAt: Date.now() }, { merge: true })
+        const bucket = admin.getBucket(bucketName)
+        const remoteFile = bucket.file(storagePath)
+        const [exists] = await remoteFile.exists()
+        if (!exists) throw new Error(`Source file not found: ${storagePath}`)
+        await new Promise((resolve, reject) => {
+          const rs = remoteFile.createReadStream()
+          rs.on('error', (err) => reject(err))
+          const ws = fs.createWriteStream(localIn)
+          ws.on('error', reject)
+          ws.on('finish', resolve)
+          rs.pipe(ws)
+        })
+        await db.collection('jobs').doc(jobId).set({ progress: 20, message: 'Downloaded from storagePath', updatedAt: Date.now() }, { merge: true })
+        downloaded = true
+      } catch (e) {
+        console.warn(`[worker:${jobId}] storagePath download failed, will try gsUri/downloadURL:`, e && (e.message || e))
+      }
+    }
+
+    // 2) gsUri (if not yet downloaded)
+    if (!downloaded && gsUri) {
+      try {
+        console.log(`[worker:${jobId}] using gsUri: ${gsUri}`)
+        await db.collection('jobs').doc(jobId).set({ progress: 5, message: 'Downloading from gsUri', updatedAt: Date.now() }, { merge: true })
+        await downloadFromGs(gsUri, localIn)
+        await db.collection('jobs').doc(jobId).set({ progress: 20, message: 'Downloaded from gsUri', updatedAt: Date.now() }, { merge: true })
+        downloaded = true
+      } catch (e) {
+        console.warn(`[worker:${jobId}] gsUri download failed, will try downloadURL:`, e && (e.message || e))
+      }
+    }
+
+    // 3) downloadURL fallback
+    if (!downloaded && downloadURL) {
       try {
         const containsAlt = downloadURL.includes('alt=media')
         const containsToken = downloadURL.includes('token=')
@@ -117,45 +165,7 @@ async function processJob(jobId, inputSpec) {
         await db.collection('jobs').doc(jobId).set({ progress: 20, message: 'Downloaded from URL', updatedAt: Date.now() }, { merge: true })
         downloaded = true
       } catch (e) {
-        console.warn(`[worker:${jobId}] HTTP download failed, will attempt storage fallback:`, e && (e.message || e))
-      }
-    }
-
-    if (!downloaded) {
-      // Try gsUri then storagePath
-      if (gsUri) {
-        try {
-          console.log(`[worker:${jobId}] using gsUri: ${gsUri}`)
-          await db.collection('jobs').doc(jobId).set({ progress: 5, message: 'Downloading from gsUri', updatedAt: Date.now() }, { merge: true })
-          await downloadFromGs(gsUri, localIn)
-          await db.collection('jobs').doc(jobId).set({ progress: 20, message: 'Downloaded from gsUri', updatedAt: Date.now() }, { merge: true })
-          downloaded = true
-        } catch (e) {
-          console.warn(`[worker:${jobId}] gsUri download failed, will try storagePath if present:`, e && (e.message || e))
-        }
-      }
-
-      if (!downloaded && storagePath) {
-        try {
-          const bucketName = admin.getBucketName && admin.getBucketName()
-          console.log(`[worker:${jobId}] using storagePath: ${storagePath} bucket=${bucketName}`)
-          await db.collection('jobs').doc(jobId).set({ progress: 5, message: 'Downloading from storagePath', updatedAt: Date.now() }, { merge: true })
-          const bucket = admin.getBucket(bucketName)
-          const remoteFile = bucket.file(storagePath)
-          // stream to local file
-          await new Promise((resolve, reject) => {
-            const rs = remoteFile.createReadStream()
-            rs.on('error', (err) => reject(err))
-            const ws = fs.createWriteStream(localIn)
-            ws.on('error', reject)
-            ws.on('finish', resolve)
-            rs.pipe(ws)
-          })
-          await db.collection('jobs').doc(jobId).set({ progress: 20, message: 'Downloaded from storagePath', updatedAt: Date.now() }, { merge: true })
-          downloaded = true
-        } catch (e) {
-          throw e
-        }
+        console.warn(`[worker:${jobId}] HTTP download failed:`, e && (e.message || e))
       }
     }
 
