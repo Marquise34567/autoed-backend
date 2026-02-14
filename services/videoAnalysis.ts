@@ -104,16 +104,29 @@ export async function analyzeVideo(inputPath: string) {
   // convert RMS dB values to linear-ish positive numbers for scoring
   const energyLinear = energies.map(e => isFinite(e) ? Math.pow(10, e / 20) : 0)
 
-  // generate candidate windows (3,5,7,10s) sliding by 1s
-  const windows = [3,5,7,10]
+  // generate candidate windows (prefer 3-5s) sliding by 0.5s to better catch short spikes
+  const windows = [3,4,5]
   const candidates: Array<any> = []
   for (let w of windows) {
-    for (let t = 0; t + w <= Math.max(1, Math.floor(duration)); t++) {
+    for (let t = 0; t + w <= Math.max(1, duration); t += 0.5) {
       // energy score: average energyLinear over window (approx)
       const startIdx = Math.max(0, Math.floor(t))
-      const endIdx = Math.min(energyLinear.length, Math.floor(t + w))
+      const endIdx = Math.min(energyLinear.length, Math.ceil(t + w))
       const slice = energyLinear.slice(startIdx, endIdx)
-      const energyAvg = slice.length ? slice.reduce((s,a)=>s+a,0)/slice.length : 0
+      const energyAvg = slice.length ? slice.reduce((s, a) => s + a, 0) / slice.length : 0
+
+      // peakiness: favors short, high-energy spikes (one-word exclamations)
+      const peak = slice.length ? Math.max(...slice) : 0
+      const peakiness = energyAvg > 0 ? peak / (energyAvg + 1e-9) : 0
+
+      // simple measure of transient activity inside the window
+      let positiveDeltas = 0
+      for (let i = 1; i < slice.length; i++) {
+        const d = slice[i] - slice[i - 1]
+        if (d > 0) positiveDeltas += d
+      }
+      const transient = positiveDeltas / (slice.length || 1)
+
       // silence coverage in window
       const silenceCoverage = silence.reduce((acc, s) => {
         const overlap = Math.max(0, Math.min(s.end, t + w) - Math.max(s.start, t))
@@ -122,12 +135,12 @@ export async function analyzeVideo(inputPath: string) {
 
       // simple heuristics for curiosity keyword detection: not available without transcript
       const curiosityKeywords = 0
-      const wordsPerSecond = slice.length ? Math.max(0.1, slice.filter(v=>v>0.0005).length / Math.max(1, slice.length)) : 0
+      const wordsPerSecond = slice.length ? Math.max(0.01, slice.filter(v => v > 0.0005).length / Math.max(1, slice.length)) : 0
 
-      // score per strategist formula weights (approximate)
-      const score = (energyAvg * 0.30) + (wordsPerSecond * 0.25) + (curiosityKeywords * 0.25) + (1 * 0.20) - (silenceCoverage * 0.50)
+      // scoring: boost peakiness and transient activity to prefer short, punchy moments
+      const score = (energyAvg * 0.22) + (wordsPerSecond * 0.12) + (curiosityKeywords * 0.10) + (peakiness * 0.35) + (transient * 0.05) - (silenceCoverage * 0.40)
 
-      candidates.push({ start: Number(t.toFixed(3)), end: Number((t + w).toFixed(3)), duration: w, energyAvg, wordsPerSecond, curiosityKeywords, silenceCoverage, score })
+      candidates.push({ start: Number(t.toFixed(3)), end: Number((t + w).toFixed(3)), duration: w, energyAvg, peak, peakiness, transient, wordsPerSecond, curiosityKeywords, silenceCoverage, score })
     }
   }
 
