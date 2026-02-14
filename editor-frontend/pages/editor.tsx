@@ -22,11 +22,18 @@ function Uploader(){
       if (!json.uploadUrl) throw new Error('No uploadUrl in response')
 
       setStatus('uploading')
+      // Log the signed URL and its query params for debugging
+      try {
+        console.log('Upload URL (from server):', json.uploadUrl)
+        const u = new URL(json.uploadUrl)
+        console.log('Signed URL params:', { 'X-Goog-SignedHeaders': u.searchParams.get('X-Goog-SignedHeaders'), 'X-Goog-Signature': u.searchParams.get('X-Goog-Signature') ? 'present' : 'missing' })
+      } catch (e) {
+        console.warn('Could not parse uploadUrl for debug logging')
+      }
+
       // Do NOT set Content-Type header manually — let the browser set it.
-      const putResp = await fetch(json.uploadUrl, {
-        method: 'PUT',
-        body: file,
-      })
+      const putResp = await fetch(json.uploadUrl, { method: 'PUT', body: file })
+      console.log('PUT response status:', putResp.status)
       if (!putResp.ok) {
         const text = await putResp.text()
         throw new Error(`Upload failed: ${putResp.status} ${text}`)

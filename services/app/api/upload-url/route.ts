@@ -1,5 +1,8 @@
 import { NextResponse } from 'next/server'
-import admin, { adminAuth, adminBucket, getBucket, getBucketName } from '@/lib/firebaseAdmin'
+import admin, { adminAuth } from '@/lib/firebaseAdmin'
+// Use @google-cloud/storage directly for signing URLs to avoid Firebase SDK signed headers
+const { Storage } = require('@google-cloud/storage')
+const fs = require('fs')
 import path from 'path'
 import { cookies } from 'next/headers'
 import { randomUUID } from 'crypto'
@@ -11,6 +14,29 @@ export const dynamic = 'force-dynamic'
 const BUCKET_NAME = process.env.FIREBASE_STORAGE_BUCKET || (process.env.FIREBASE_PROJECT_ID ? `${process.env.FIREBASE_PROJECT_ID}.appspot.com` : null)
 const MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024 // 2GB
 const SIGNED_URL_EXPIRES_IN = 3600 // 1 hour in seconds
+
+function loadServiceAccount(): any | null {
+  const saEnv = process.env.FIREBASE_SERVICE_ACCOUNT_JSON || process.env.FIREBASE_SERVICE_ACCOUNT
+  if (saEnv) {
+    try {
+      let raw = saEnv.trim()
+      if (!raw.startsWith('{') && fs.existsSync(raw)) raw = fs.readFileSync(raw, 'utf8')
+      const parsed = JSON.parse(raw)
+      if (parsed.private_key) parsed.private_key = String(parsed.private_key).replace(/\\n/g, '\n')
+      return parsed
+    } catch (e) {
+      console.warn('[upload-url] Failed to parse FIREBASE_SERVICE_ACCOUNT_JSON')
+    }
+  }
+  const projectId = process.env.FIREBASE_PROJECT_ID
+  const clientEmail = process.env.FIREBASE_CLIENT_EMAIL
+  const privateKeyRaw = process.env.FIREBASE_PRIVATE_KEY
+  if (projectId && clientEmail && privateKeyRaw) return { project_id: projectId, client_email: clientEmail, private_key: String(privateKeyRaw).replace(/\\n/g, '\n') }
+  return null
+}
+
+const serviceAccount = loadServiceAccount()
+const storageClient = serviceAccount ? new Storage({ credentials: serviceAccount }) : null
 
 /**
  * Check if all required environment variables are set
@@ -171,17 +197,27 @@ export async function POST(request: Request) {
 
     // Step 7: Create signed upload URL using GCS signed URL (v4)
     try {
-      if (!contentType) {
-        console.error(`${logPrefix} Missing contentType in request body`)
-        return NextResponse.json({ error: 'Missing fileName or contentType' }, { status: 400 })
+      if (!storageClient) {
+        console.error(`${logPrefix} service account not available for signing URLs`)
+        return NextResponse.json({ error: 'Service account not configured' }, { status: 500 })
+      }
+      const bucket = storageClient.bucket(BUCKET_NAME)
+      const file = bucket.file(storagePath)
+      const expiresAt = Date.now() + SIGNED_URL_EXPIRES_IN * 1000 // milliseconds since epoch
+
+      // Create V4 signed URL for write (PUT). Do NOT include contentType or extra signed headers.
+      const [uploadUrl] = await file.getSignedUrl({ version: 'v4', action: 'write', expires: expiresAt })
+
+      // Log query params for debugging
+      try {
+        const u = new URL(uploadUrl)
+        const sig = u.searchParams.get('X-Goog-Signature')
+        const signedHeaders = u.searchParams.get('X-Goog-SignedHeaders')
+        console.log(`${logPrefix} Signed URL: path=${storagePath} X-Goog-Signature=${sig ? sig.slice(0,8)+'...' : '<missing>'} X-Goog-SignedHeaders=${signedHeaders}`)
+      } catch (e) {
+        console.log(`${logPrefix} Signed URL created (unable to parse query params)`)
       }
 
-      const file = bucket.file(storagePath)
-      const expiresAt = new Date(Date.now() + SIGNED_URL_EXPIRES_IN * 1000)
-      // Sign a write URL and bind Content-Type — frontend PUT must match this value
-      const [uploadUrl] = await file.getSignedUrl({ version: 'v4', action: 'write', expires: expiresAt, contentType })
-
-      console.log(`${logPrefix} ✓ Signed URL created successfully`)
       return NextResponse.json({ uploadUrl, path: storagePath, jobId, tokenExpiresIn: SIGNED_URL_EXPIRES_IN }, { status: 200 })
     } catch (e: any) {
       console.error(`${logPrefix} Failed to create signed upload URL:`, e?.message || e)

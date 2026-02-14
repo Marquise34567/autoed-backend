@@ -356,31 +356,41 @@ app.post('/api/upload-url', (req, res) => {
       const finalName = fileName || filename
       if (!finalName) return res.status(400).json({ ok: false, error: 'Missing fileName' })
 
-      let adminFallback = null
+      // Use @google-cloud/storage directly to sign URLs (avoid firebase-admin signed headers)
+      let serviceAccount = null
       try {
-        adminFallback = require('./utils/firebaseAdmin')
+        const saEnv = process.env.FIREBASE_SERVICE_ACCOUNT_JSON || process.env.FIREBASE_SERVICE_ACCOUNT
+        if (saEnv) {
+          let raw = saEnv.trim()
+          const fs = require('fs')
+          if (!raw.startsWith('{') && fs.existsSync(raw)) raw = fs.readFileSync(raw, 'utf8')
+          serviceAccount = JSON.parse(raw)
+          if (serviceAccount.private_key) serviceAccount.private_key = String(serviceAccount.private_key).replace(/\\n/g, '\n')
+        }
       } catch (e) {
-        adminFallback = null
-      }
-
-      if (!adminFallback || !adminFallback.storage) {
-        return res.status(500).json({ ok: false, error: 'Firebase admin not configured' })
+        console.warn('[upload-url fallback] failed to parse service account')
       }
 
       try {
         const bucketName = process.env.FIREBASE_STORAGE_BUCKET
         if (!bucketName) return res.status(500).json({ ok: false, error: 'FIREBASE_STORAGE_BUCKET is not set' })
-        const bucket = adminFallback.storage().bucket(bucketName)
+        if (!serviceAccount) return res.status(500).json({ ok: false, error: 'Service account not configured for signing URLs' })
+        const { Storage } = require('@google-cloud/storage')
+        const storage = new Storage({ credentials: serviceAccount })
+        const bucket = storage.bucket(bucketName)
         const safeFilename = String(finalName).replace(/[^a-zA-Z0-9._-]/g, '_')
         const destPath = `uploads/${Date.now()}-${safeFilename}`
         const file = bucket.file(destPath)
-        const expiresAt = new Date(Date.now() + 15 * 60 * 1000)
+        const expiresAt = Date.now() + 15 * 60 * 1000
 
-        // Sign URL without binding Content-Type by default to avoid SignatureDoesNotMatch
-        const signOpts = { version: 'v4', action: 'write', expires: expiresAt }
-        if (enforceContentType && contentType) signOpts.contentType = contentType
-        const [signedUrl] = await file.getSignedUrl(signOpts)
-        console.log('[upload-url fallback] signedUrl generated:', !!signedUrl, { path: destPath, bucket: bucket.name })
+        // Sign URL without binding Content-Type
+        const [signedUrl] = await file.getSignedUrl({ version: 'v4', action: 'write', expires: expiresAt })
+        try {
+          const u = new URL(signedUrl)
+          console.log('[upload-url fallback] signedUrl generated:', { path: destPath, bucket: bucket.name, 'X-Goog-SignedHeaders': u.searchParams.get('X-Goog-SignedHeaders'), 'X-Goog-Signature': u.searchParams.get('X-Goog-Signature') ? 'present' : 'missing' })
+        } catch (e) {
+          console.log('[upload-url fallback] signedUrl generated')
+        }
         if (!signedUrl || typeof signedUrl !== 'string') {
           console.error('[upload-url fallback] signedUrl is invalid', { path: destPath, bucket: bucket.name })
           return res.status(500).json({ error: 'SIGNED_URL_FAILED', details: 'signedUrl undefined' })
