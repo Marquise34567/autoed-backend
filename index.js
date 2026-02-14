@@ -327,6 +327,13 @@ try {
   console.warn('[debug routes] failed to mount debug routes', e && e.message ? e.message : e)
 }
 
+// Lightweight ffmpeg availability check (useful to verify Railway runtime)
+try {
+  app.use('/api/ffmpeg-check', require('./routes/ffmpeg-check'))
+} catch (e) {
+  console.warn('[ffmpeg-check] failed to mount ffmpeg-check route', e && e.message ? e.message : e)
+}
+
 // Confirm mounted routes for easier production debugging
 try {
   console.log('Mounted /api/jobs')
