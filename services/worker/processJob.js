@@ -7,7 +7,7 @@ const { exec } = require('child_process')
 const admin = require('../../utils/firebaseAdmin')
 const { getSignedUrlForPath } = require('../../utils/storageSignedUrl')
 
-const db = admin.db || (admin.firestore && admin.firestore())
+const db = admin.db || null
 
 async function streamDownload(url, dest) {
   // Follow up to 5 redirects

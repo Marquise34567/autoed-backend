@@ -106,10 +106,23 @@ if (stripeKey && stripeKey.startsWith("sk_")) {
   console.warn("⚠️ STRIPE_SECRET_KEY missing/invalid — billing disabled.");
 }
 
-const admin = require('./utils/firebaseAdmin')
-
-// Firestore instance for debug routes and helpers
-const db = admin.firestore()
+let admin = null
+let db = null
+try {
+  admin = require('./utils/firebaseAdmin')
+  if (admin && typeof admin.firestore === 'function') {
+    try {
+      db = admin.firestore()
+    } catch (e) {
+      console.warn('[startup] admin.firestore() threw', e && (e.message || e))
+      db = null
+    }
+  }
+} catch (e) {
+  console.warn('[startup] utils/firebaseAdmin not available', e && (e.message || e))
+  admin = null
+  db = null
+}
 
 // Helper: cleanly log Firestore / gRPC errors with structured JSON
 function logFirestoreError(err, context = {}) {
@@ -166,8 +179,9 @@ try {
 // Temporary debug endpoint to verify Firebase initialization
 app.get('/api/firebase-check', (req, res) => {
   try {
-    const apps = Array.isArray(admin.apps) ? admin.apps.length : 0
+    const apps = admin && Array.isArray(admin.apps) ? admin.apps.length : 0
     if (apps && apps > 0) return res.json({ ok: true, apps })
+    if (!admin) return res.status(503).json({ ok: false, error: 'Firebase not configured' })
     return res.json({ ok: false, error: 'Firebase not initialized' })
   } catch (e) {
     return res.status(500).json({ ok: false, error: e && e.message ? e.message : String(e) })
@@ -177,6 +191,7 @@ app.get('/api/firebase-check', (req, res) => {
 // Debug endpoint to surface Firestore errors clearly
 app.get('/api/debug/firestore', wrapAsync(async (req, res) => {
   try {
+    if (!db) return res.status(503).json({ ok: false, error: 'Firestore not configured' })
     const snap = await db.collection('jobs').limit(1).get()
     return res.json({ ok: true, size: snap.size })
   } catch (err) {
@@ -468,6 +483,7 @@ try {
 } catch (e) {
   console.warn('[routes] failed to mount /api/upload', e && e.message ? e.message : e)
 }
+try { console.log('Mounted /api/upload') } catch (e) {}
 // Signed-upload endpoints removed to enforce client-side Firebase SDK uploads.
 // Debug routes removed (signed URL debug endpoints disabled)
 

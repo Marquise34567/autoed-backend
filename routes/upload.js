@@ -2,11 +2,18 @@ const express = require('express')
 const multer = require('multer')
 
 const router = express.Router()
-const upload = multer({ storage: multer.memoryStorage() })
+let upload = null
+try {
+  upload = multer({ storage: multer.memoryStorage() })
+  console.log('[routes/upload] multer initialized')
+} catch (e) {
+  console.warn('[routes/upload] failed to initialize multer', e && (e.message || e))
+}
 
-module.exports = router
-
-router.post('/', upload.single('file'), async (req, res) => {
+router.post('/', (req, res, next) => {
+  if (!upload) return res.status(503).json({ ok: false, error: 'Upload unavailable' })
+  return upload.single('file')(req, res, next)
+}, async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ ok: false, error: 'No file uploaded' })
     const admin = require('../utils/firebaseAdmin')
@@ -57,3 +64,5 @@ router.post('/', upload.single('file'), async (req, res) => {
     return res.status(500).json({ ok: false, error: 'Upload failed', message: err && err.message })
   }
 })
+
+module.exports = router
