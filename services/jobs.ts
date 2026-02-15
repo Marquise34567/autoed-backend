@@ -1,4 +1,4 @@
-import admin, { getFirestore } from './firebaseAdmin'
+import admin, { getFirestore, withTimeout } from './firebaseAdmin'
 
 type JobRecord = {
   id: string
@@ -50,22 +50,45 @@ export async function createJob(job: JobRecord) {
     error: job.error || null,
     logs: job.logs || [],
   }
-  await docRef.set(base)
-  return base
+  try {
+    await withTimeout(docRef.set(base), 10000)
+    return base
+  } catch (err) {
+    console.error('[FIRESTORE_ERROR]', {
+      message: err?.message,
+      code: err?.code,
+      details: err?.details,
+      stack: err?.stack,
+      raw: err,
+    })
+    throw err
+  }
 }
 
 export async function getJob(id: string): Promise<JobRecord | null> {
   const db = getFirestore()
   const docRef = db.collection(COLLECTION).doc(id)
-  const doc = await docRef.get()
+  let doc
+  try {
+    doc = await withTimeout(docRef.get(), 10000)
+  } catch (err) {
+    console.error('[FIRESTORE_ERROR]', {
+      message: err?.message,
+      code: err?.code,
+      details: err?.details,
+      stack: err?.stack,
+      raw: err,
+    })
+    throw err
+  }
   if (!doc.exists) return null
   const data = (doc.data() || {}) as JobRecord
   const { job, cleanupPatch } = sanitizeJobRead(data)
   if (cleanupPatch) {
     try {
-      await docRef.set(cleanupPatch, { merge: true })
-    } catch (_) {
-      // ignore cleanup failures
+      await withTimeout(docRef.set(cleanupPatch, { merge: true }), 8000)
+    } catch (e) {
+      console.warn('[FIRESTORE_CLEANUP_FAILED]', e && e.message ? e.message : e)
     }
   }
   // Attach signed URLs for client consumption (do not persist)
@@ -73,6 +96,7 @@ export async function getJob(id: string): Promise<JobRecord | null> {
     const withUrls = await attachSignedUrlsToJob(job, 30)
     return withUrls
   } catch (e) {
+    console.warn('[ATTACH_URLS_FAILED]', e && e.message ? e.message : e)
     return job
   }
 }
@@ -145,7 +169,19 @@ async function attachSignedUrlsToJob(job: JobRecord, expiresMinutes = 30): Promi
 export async function updateJob(id: string, patch: Partial<JobRecord>) {
   const db = getFirestore()
   const docRef = db.collection(COLLECTION).doc(id)
-  const snap = await docRef.get()
+  let snap
+  try {
+    snap = await withTimeout(docRef.get(), 10000)
+  } catch (err) {
+    console.error('[FIRESTORE_ERROR]', {
+      message: err?.message,
+      code: err?.code,
+      details: err?.details,
+      stack: err?.stack,
+      raw: err,
+    })
+    throw err
+  }
   if (!snap.exists) {
     return null
   }
@@ -154,18 +190,52 @@ export async function updateJob(id: string, patch: Partial<JobRecord>) {
   const sanitized = sanitizeJobPatch(patch)
   const next = { ...cleanedCurrent, ...sanitized, updatedAt: now() }
   const writePayload = cleanupPatch ? { ...next, ...cleanupPatch } : next
-  await docRef.set(writePayload, { merge: true })
+  try {
+    await withTimeout(docRef.set(writePayload, { merge: true }), 10000)
+  } catch (err) {
+    console.error('[FIRESTORE_ERROR]', {
+      message: err?.message,
+      code: err?.code,
+      details: err?.details,
+      stack: err?.stack,
+      raw: err,
+    })
+    throw err
+  }
   return next as JobRecord
 }
 
 export async function appendJobLog(id: string, message: string) {
   const db = getFirestore()
   const docRef = db.collection(COLLECTION).doc(id)
-  const snap = await docRef.get()
+  let snap
+  try {
+    snap = await withTimeout(docRef.get(), 8000)
+  } catch (err) {
+    console.error('[FIRESTORE_ERROR]', {
+      message: err?.message,
+      code: err?.code,
+      details: err?.details,
+      stack: err?.stack,
+      raw: err,
+    })
+    throw err
+  }
   const current = snap.exists ? (snap.data() || {}) : {}
   const logs = Array.isArray(current.logs) ? [...current.logs, message] : [message]
   const next = { ...current, logs, updatedAt: now() }
-  await docRef.set(next, { merge: true })
+  try {
+    await withTimeout(docRef.set(next, { merge: true }), 10000)
+  } catch (err) {
+    console.error('[FIRESTORE_ERROR]', {
+      message: err?.message,
+      code: err?.code,
+      details: err?.details,
+      stack: err?.stack,
+      raw: err,
+    })
+    throw err
+  }
   return next as JobRecord
 }
 

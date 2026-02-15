@@ -29,3 +29,26 @@ export const adminAuth = admin.auth()
 export const adminDb = admin.firestore()
 
 export default admin
+
+// Provide a helper to obtain Firestore instance (avoid accidental double-inits elsewhere)
+export function getFirestore() {
+  return admin.firestore()
+}
+
+// Promise timeout helper to avoid Firestore calls hanging indefinitely
+export function withTimeout<T>(p: Promise<T>, ms = 10000): Promise<T> {
+  let timer: NodeJS.Timeout
+  const timeout = new Promise<never>((_, rej) => {
+    timer = setTimeout(() => rej(new Error('Firestore operation timed out')), ms)
+  })
+  return Promise.race([p, timeout]).finally(() => clearTimeout(timer)) as Promise<T>
+}
+
+// Global process handlers to surface unhandled errors in logs
+process.on('unhandledRejection', (err) => {
+  console.error('[UNHANDLED_REJECTION]', err)
+})
+
+process.on('uncaughtException', (err) => {
+  console.error('[UNCAUGHT_EXCEPTION]', err)
+})

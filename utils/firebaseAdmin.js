@@ -6,6 +6,11 @@ const rawStorageBucket = process.env.FIREBASE_STORAGE_BUCKET;
 const serviceAccountJson = rawServiceAccountJson && rawServiceAccountJson.trim();
 const storageBucket = rawStorageBucket && String(rawStorageBucket).trim();
 
+// Prefer explicit env vars for single-line private key setup
+const projectIdEnv = process.env.FIREBASE_PROJECT_ID
+const clientEmailEnv = process.env.FIREBASE_CLIENT_EMAIL
+const privateKeyEnv = process.env.FIREBASE_PRIVATE_KEY
+
 function getBucketName() {
   if (!storageBucket) return null
   // allow values like 'gs://bucket/name' or plain bucket name
@@ -14,29 +19,38 @@ function getBucketName() {
   return stripped.replace(/^gs:\/\//i, '').trim()
 }
 
-// Validate required env vars
-if (!serviceAccountJson) {
-  throw new Error('FIREBASE_SERVICE_ACCOUNT_JSON is required to initialize Firebase Admin')
+// Validate and build credential
+let credential = null
+if (projectIdEnv && clientEmailEnv && privateKeyEnv) {
+  // Use the three env vars method (handles escaped newlines)
+  credential = admin.credential.cert({
+    projectId: projectIdEnv,
+    clientEmail: clientEmailEnv,
+    privateKey: String(privateKeyEnv).replace(/\\n/g, '\n'),
+  })
+} else if (serviceAccountJson) {
+  let serviceAccount
+  try {
+    serviceAccount = JSON.parse(serviceAccountJson)
+  } catch (e) {
+    throw new Error('Failed to parse FIREBASE_SERVICE_ACCOUNT_JSON: ' + (e && e.message ? e.message : String(e)))
+  }
+  if (serviceAccount.private_key) {
+    serviceAccount.private_key = String(serviceAccount.private_key).replace(/\\n/g, '\n')
+  }
+  credential = admin.credential.cert(serviceAccount)
+} else {
+  throw new Error('Firebase credentials not configured. Set FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, FIREBASE_PRIVATE_KEY or FIREBASE_SERVICE_ACCOUNT_JSON')
 }
+
 if (!storageBucket) {
   throw new Error('FIREBASE_STORAGE_BUCKET is required to initialize Firebase Admin')
-}
-
-let serviceAccount
-try {
-  serviceAccount = JSON.parse(serviceAccountJson)
-} catch (e) {
-  throw new Error('Failed to parse FIREBASE_SERVICE_ACCOUNT_JSON: ' + (e && e.message ? e.message : String(e)))
-}
-
-if (serviceAccount.private_key) {
-  serviceAccount.private_key = String(serviceAccount.private_key).replace(/\\n/g, '\n')
 }
 
 // Initialize admin app only once
 if (!admin.apps || !admin.apps.length) {
   admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount),
+    credential: credential,
     storageBucket: getBucketName(),
   })
   console.log('[firebaseAdmin] initialized with bucket:', getBucketName())
