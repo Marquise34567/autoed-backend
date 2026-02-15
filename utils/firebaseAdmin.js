@@ -26,7 +26,25 @@ if (missing.length) {
 } else {
   // safe parse private key with escaped newlines
   const privateKey = String(process.env.FIREBASE_PRIVATE_KEY).replace(/\\n/g, '\n')
-  const storageBucket = String(process.env.FIREBASE_STORAGE_BUCKET).trim()
+  let storageBucket = String(process.env.FIREBASE_STORAGE_BUCKET).trim()
+
+  // Normalize common bucket name typos and variants to expected formats so
+  // signed URLs are generated against the real bucket. Examples seen in the
+  // wild: "autoeditor-d4940.firestorage.app" (missing "base"). Normalize
+  // to either the `.firebasestorage.app` or `.appspot.com` forms.
+  try {
+    const orig = storageBucket
+    storageBucket = storageBucket.replace(/firestorage\.app$/i, 'firebasestorage.app')
+    storageBucket = storageBucket.replace(/\.firestorage\./i, '.firebasestorage.')
+    storageBucket = storageBucket.replace(/firestorage/i, 'firebasestorage')
+    // If the bucket looks like just the project id (no dot), default to appspot.com
+    if (!/\./.test(storageBucket)) {
+      storageBucket = storageBucket + '.appspot.com'
+    }
+    if (storageBucket !== orig) console.warn('[firebaseAdmin] Normalized FIREBASE_STORAGE_BUCKET', orig, '->', storageBucket)
+  } catch (e) {
+    console.warn('[firebaseAdmin] bucket normalization failed', e && e.message)
+  }
 
   const admin = adminLib
   if (!admin.apps.length) {
