@@ -29,32 +29,25 @@ const app = express()
 
 const cors = require('cors')
 
-// Allowlist for production frontend(s) and local dev
 const allowedOrigins = [
   'https://www.autoeditor.app',
   'https://autoeditor.app',
   'http://localhost:3000',
 ]
 
-// CORS options object used by both the global middleware and preflight handler
 const corsOptions = {
   origin: function (origin, callback) {
-    // Allow server-to-server requests with no Origin header
     if (!origin) return callback(null, true)
-    const allowed = allowedOrigins.includes(origin)
-    try { console.log('[cors] origin check', { origin, allowed }) } catch (e) {}
-    if (allowed) return callback(null, origin)
+    if (allowedOrigins.includes(origin)) return callback(null, true)
     return callback(new Error('Not allowed by CORS'))
   },
-  credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true,
 }
 
-// Register CORS middleware globally BEFORE any routes
+// Mount CORS before any routes
 app.use(cors(corsOptions))
-
-// Ensure preflight OPTIONS are handled for all routes
 app.options('*', cors(corsOptions))
 
 // Log CORS origin on every request for deploy verification
