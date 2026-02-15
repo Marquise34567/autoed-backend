@@ -29,39 +29,33 @@ const app = express()
 
 const cors = require('cors')
 
-// Allowlist for production frontend(s) and optional preview URL from env
+// Allowlist for production frontend(s) and local dev
 const allowedOrigins = [
-  'https://autoeditor.app',
   'https://www.autoeditor.app',
+  'https://autoeditor.app',
+  'http://localhost:3000',
 ]
-// Optional: Vercel preview host from environment
-if (process.env.VERCEL_URL) allowedOrigins.push(`https://${process.env.VERCEL_URL}`)
-const localhostRegex = /^http:\/\/localhost(?::\d+)?$/i
-const vercelPreviewRegex = /^https:\/\/autoeddd-.*\.vercel\.app$/
 
 // CORS options object used by both the global middleware and preflight handler
 const corsOptions = {
   origin: function (origin, callback) {
     // Allow server-to-server requests with no Origin header
     if (!origin) return callback(null, true)
-    const allowed = allowedOrigins.includes(origin) || localhostRegex.test(origin) || vercelPreviewRegex.test(origin)
-    try {
-      console.log('[cors] origin check', { origin, allowed })
-    } catch (e) {}
-    if (allowed) return callback(null, true)
-    // Indicate not allowed without raising an error so responses are still returned
-    return callback(null, false)
+    const allowed = allowedOrigins.includes(origin)
+    try { console.log('[cors] origin check', { origin, allowed }) } catch (e) {}
+    if (allowed) return callback(null, origin)
+    return callback(new Error('Not allowed by CORS'))
   },
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }
 
-// Register CORS middleware globally before routes
+// Register CORS middleware globally BEFORE any routes
 app.use(cors(corsOptions))
 
-// Ensure preflight requests are handled (avoid using '*' pattern)
-app.options(/.*/, cors(corsOptions))
+// Ensure preflight OPTIONS are handled for all routes
+app.options('*', cors(corsOptions))
 
 // Log CORS origin on every request for deploy verification
 app.use((req, res, next) => {
