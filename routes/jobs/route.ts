@@ -61,7 +61,8 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ jobId: job.id })
   } catch (err: any) {
-    console.error("/api/jobs POST error:", err);
-    return NextResponse.json({ error: err?.message || "Unknown error" }, { status: 500 });
+    console.error('API ERROR:', err);
+    console.error('STACK:', err?.stack);
+    return NextResponse.json({ ok: false, message: err?.message || 'Unknown error', stack: err?.stack || null }, { status: 500 });
   }
 }
