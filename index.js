@@ -566,10 +566,15 @@ app.get('/api/jobs', (req, res) => {
 // This runs after mounts, so if the mounted router exists it will handle the POST.
 // Signed-upload endpoints removed to enforce client-side Firebase SDK uploads.
 
-// Return JSON for missing API routes instead of HTML
-// If the mounted `/api/upload-url` router failed to load, return a clear JSON 404
-app.use('/api/upload-url', (_req, res) => {
-  return res.status(404).json({ ok: false, error: 'Upload URL service unavailable on this instance' })
+// Top-level POST/GET fallbacks for /api/upload-url to guard against missing mounted router
+// This runs AFTER mounts, so if the mounted router exists it will take precedence.
+app.post('/api/upload-url', (req, res) => {
+  console.log('[upload-url] fallback POST handler invoked')
+  return res.status(200).json({ ok: false, error: 'signed-url-not-implemented' })
+})
+app.get('/api/upload-url', (req, res) => {
+  console.log('[upload-url] fallback GET handler invoked')
+  return res.status(200).json({ ok: false, error: 'signed-url-not-implemented' })
 })
 
 // Backwards-compatible proxy route: some frontends call `/api/proxy/upload-url`.
@@ -580,12 +585,6 @@ app.all('/api/proxy/upload-url', (req, res) => {
   } catch (e) {
     return res.status(500).json({ ok: false, error: 'Proxy redirect failed', detail: e && e.message })
   }
-
-app.use((req, res, next) => {
-  if (req.path && req.path.startsWith('/api/')) {
-    return res.status(404).json({ ok: false, error: 'Not found', path: req.originalUrl })
-  }
-  return next()
 })
 
 // Generic error handler that returns JSON for API routes
@@ -604,7 +603,7 @@ app.use((err, req, res, next) => {
     const status = err && err.status ? err.status : 500
     const error = err && err.message ? err.message : 'Server error'
     const detail = err && (err.stack || err.details || null)
-    res.status(status).json({ error, detail })
+    res.status(status).json({ ok: false, error, detail })
     return
   }
   return next(err)
@@ -650,6 +649,14 @@ app.listen(PORT, '0.0.0.0', () => {
   } catch (e) {
     console.error('[startup] failed to start worker', e && (e.stack || e.message || e))
   }
+})
+// Final 404 handler: must be last. Return JSON for API routes.
+app.use((req, res) => {
+  if (req.path && req.path.startsWith('/api/')) {
+    return res.status(404).json({ ok: false, error: 'Not found', path: req.path })
+  }
+  // fallback for non-API routes
+  return res.status(404).send('Not found')
 })
 // Start worker loop if enabled via env
 try {
