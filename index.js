@@ -76,20 +76,29 @@ if (stripeKey && stripeKey.startsWith("sk_")) {
   console.warn("⚠️ STRIPE_SECRET_KEY missing/invalid — billing disabled.");
 }
 
-const admin = require('firebase-admin')
-
-if (!admin.apps.length) {
-  admin.initializeApp({
-    credential: admin.credential.cert({
-      projectId: process.env.FIREBASE_PROJECT_ID,
-      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-      privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
-    }),
-    storageBucket: 'autoeditor-d4940.appspot.com',
-  })
+// Use a safe firebase admin initializer that tolerates missing/invalid envs
+let admin = null
+let bucket = null
+try {
+  // utils/firebaseAdmin will attempt to initialize admin only when valid creds are present
+  admin = require('./utils/firebaseAdmin')
+  try {
+    const bn = process.env.FIREBASE_STORAGE_BUCKET || 'autoeditor-d4940.appspot.com'
+    if (admin && typeof admin.getBucket === 'function') {
+      try { bucket = admin.getBucket(bn) } catch (e) { bucket = null }
+    }
+    if (!bucket && admin && admin.storage) {
+      try { bucket = admin.storage().bucket(bn) } catch (e) { bucket = null }
+    }
+    if (!bucket) console.warn('[startup] Firebase storage bucket not available (will error on upload attempts)')
+  } catch (e) {
+    console.warn('[startup] failed to resolve storage bucket', e && (e.stack || e.message || e))
+  }
+} catch (e) {
+  // If utils module cannot be loaded, fall back to firebase-admin but do NOT initialize.
+  console.warn('[startup] failed to load ./utils/firebaseAdmin, falling back to firebase-admin stub', e && (e.stack || e.message || e))
+  try { admin = require('firebase-admin') } catch (er) { admin = null }
 }
-
-const bucket = admin.storage().bucket('autoeditor-d4940.appspot.com')
 
 // Helper: cleanly log Firestore / gRPC errors with structured JSON
 function logFirestoreError(err, context = {}) {
