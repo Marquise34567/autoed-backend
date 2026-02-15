@@ -18,11 +18,26 @@ router.post('/', async (req, res) => {
 
     if (!filename || !contentType) return res.status(400).json({ ok: false, error: 'Missing filename or contentType' })
 
-    if (admin && admin._missingEnv) return res.status(500).json({ ok: false, error: 'Missing required env vars', missing: admin._missingEnv })
+    // Require Firebase to be configured
+    if (admin && admin._missingEnv) return res.status(500).json({ ok: false, error: 'Firebase not configured' })
+
+    // Require authentication: expect Authorization: Bearer <idToken>
+    let uid = null
+    try {
+      const auth = req.headers.authorization || req.headers.Authorization || null
+      const token = auth && auth.startsWith('Bearer ') ? auth.split(' ')[1] : (body.idToken || null)
+      if (!token) return res.status(401).json({ ok: false, error: 'Missing auth token' })
+      if (!admin || !admin.auth) return res.status(500).json({ ok: false, error: 'Firebase auth not available' })
+      const decoded = await admin.auth().verifyIdToken(token)
+      uid = decoded && decoded.uid ? decoded.uid : null
+    } catch (e) {
+      console.error('[upload-url] token verification failed', e && (e.stack || e.message || e))
+      return res.status(401).json({ ok: false, error: 'Invalid auth token' })
+    }
 
     const jobId = (crypto.randomUUID && crypto.randomUUID()) || `${Date.now()}-${Math.floor(Math.random()*100000)}`
     const safe = sanitizeFilename(filename)
-    const storagePath = `uploads/anon/${jobId}/${safe}`
+    const storagePath = `uploads/${uid || 'anon'}/${jobId}/${safe}`
 
     // Resolve bucket
     let bucket = null

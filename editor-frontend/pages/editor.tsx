@@ -13,11 +13,14 @@ function Uploader(){
       const contentType = file.type || 'application/octet-stream'
       const body = { filename: file.name, contentType }
 
-      // Use proxy path to ensure requests go through Next.js proxy
-      const proxyPath = '/api/proxy/api/upload-url'
-
+      // Use explicit backend URL via NEXT_PUBLIC_API_URL (avoid proxy)
+      const backendBase = (process.env.NEXT_PUBLIC_API_URL || '').replace(/\/$/, '')
       console.log('[frontend] requesting signed URL', { filename: file.name, contentType })
-      const resp = await fetch(proxyPath, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      const resp = await fetch(`${backendBase}/api/upload-url`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      })
       if (!resp.ok) {
         const txt = await resp.text()
         throw new Error(`Signed URL request failed: ${resp.status} ${txt}`)

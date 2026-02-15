@@ -1,23 +1,43 @@
-// Initialize Firebase Admin from FIREBASE_SERVICE_ACCOUNT_JSON only
+// Firebase Admin initializer: support both a single JSON env or split env vars.
 const adminLib = require('firebase-admin')
 
-// Prefer single service-account JSON string in env: FIREBASE_SERVICE_ACCOUNT_JSON
-let serviceAccount = null
-try {
-  const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON || ''
-  if (raw && raw.trim()) {
-    serviceAccount = JSON.parse(raw)
+const DEFAULT_BUCKET = 'autoeditor-d4940.firebasestorage.app'
+const storageBucketEnvRaw = (process.env.FIREBASE_STORAGE_BUCKET || '').trim()
+const storageBucket = storageBucketEnvRaw || DEFAULT_BUCKET
+
+let credential = null
+// Try service account JSON first
+const rawSa = process.env.FIREBASE_SERVICE_ACCOUNT_JSON || ''
+if (rawSa && rawSa.trim()) {
+  try {
+    const sa = JSON.parse(rawSa)
+    if (sa && sa.client_email && sa.private_key) {
+      sa.private_key = String(sa.private_key).replace(/\\n/g, '\n')
+      credential = adminLib.credential.cert(sa)
+    }
+  } catch (e) {
+    console.error('[firebaseAdmin] Failed to parse FIREBASE_SERVICE_ACCOUNT_JSON', e && (e.message || e))
   }
-} catch (e) {
-  console.error('[firebaseAdmin] Failed to parse FIREBASE_SERVICE_ACCOUNT_JSON', e && (e.stack || e.message || e))
-  serviceAccount = null
 }
 
-const storageBucketEnv = (process.env.FIREBASE_STORAGE_BUCKET || '').trim() || 'autoeditor-d4940.appspot.com'
+// Fallback to split env vars
+if (!credential) {
+  const pid = process.env.FIREBASE_PROJECT_ID
+  const cemail = process.env.FIREBASE_CLIENT_EMAIL
+  let pkey = process.env.FIREBASE_PRIVATE_KEY
+  if (pid && cemail && pkey) {
+    try {
+      pkey = String(pkey).replace(/\\n/g, '\n')
+      credential = adminLib.credential.cert({ projectId: pid, clientEmail: cemail, privateKey: pkey })
+    } catch (e) {
+      console.error('[firebaseAdmin] Failed to initialize credential from env vars', e && (e.message || e))
+    }
+  }
+}
 
-if (!serviceAccount || !serviceAccount.client_email || !serviceAccount.private_key) {
-  const missing = ['FIREBASE_SERVICE_ACCOUNT_JSON']
-  console.error('[firebaseAdmin] Missing or invalid service account JSON. Missing:', missing.join(', '))
+if (!credential) {
+  const missing = ['FIREBASE_SERVICE_ACCOUNT_JSON or FIREBASE_PROJECT_ID/CLIENT_EMAIL/PRIVATE_KEY']
+  console.error('[firebaseAdmin] Firebase credentials not configured. Missing:', missing.join(', '))
   const stub = {
     _missingEnv: missing,
     apps: [],
@@ -32,37 +52,27 @@ if (!serviceAccount || !serviceAccount.client_email || !serviceAccount.private_k
   }
   module.exports = stub
 } else {
-  // Ensure private key has real newlines
-  try {
-    serviceAccount.private_key = String(serviceAccount.private_key).replace(/\\n/g, '\n')
-  } catch (e) {}
-
   const admin = adminLib
   if (!admin.apps.length) {
     try {
       admin.initializeApp({
-        credential: admin.credential.cert(serviceAccount),
-        storageBucket: storageBucketEnv,
+        credential,
+        storageBucket: storageBucket,
       })
-      console.log('[startup] Firebase Admin initialized')
-      try {
-        console.log('[startup] Storage bucket:', admin.storage().bucket().name)
-      } catch (e) {
-        console.log('[startup] Storage bucket: (failed to read name)', e && e.message)
-      }
+      console.log('[startup] Firebase initialized OK:', storageBucket)
     } catch (e) {
       console.error('[firebaseAdmin] initializeApp failed', e && (e.stack || e.message || e))
       throw e
     }
   }
 
-  const bucket = admin.storage().bucket(storageBucketEnv)
+  const bucket = admin.storage().bucket(storageBucket)
 
   admin.getBucket = (name) => {
-    const bn = name || storageBucketEnv
+    const bn = name || storageBucket
     return admin.storage().bucket(bn)
   }
-  admin.getBucketName = () => storageBucketEnv
+  admin.getBucketName = () => storageBucket
 
   module.exports = admin
   module.exports.getBucket = () => bucket

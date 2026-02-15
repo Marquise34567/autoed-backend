@@ -317,19 +317,51 @@ router.post('/', async (req, res) => {
     const { storagePath, gsUri, downloadURL, filename, contentType } = body
     const smartZoom = body.smartZoom || null
 
-    // REQUIRE storagePath to match frontend behavior
-    if (!storagePath) {
-      return res.status(400).json({ ok: false, error: 'Missing required field: storagePath' })
+    // Accept either storagePath (preferred) or gsUri.
+    if (!storagePath && !gsUri && !downloadURL) {
+      return res.status(400).json({ ok: false, error: 'Missing required field: storagePath or gsUri or downloadURL' })
     }
 
     const jobId = (crypto.randomUUID && crypto.randomUUID()) || `${Date.now()}-${Math.floor(Math.random() * 100000)}`
 
-    // Build canonical gsUri when possible
-    const computedGs = gsUri || (storagePath && (admin.getBucketName ? `gs://${admin.getBucketName()}/${storagePath}` : null)) || null
+    // Build canonical storagePath and gsUri when possible
+    let finalStoragePath = storagePath || null
+    let finalGsUri = gsUri || null
+    // If gsUri provided like gs://bucket/path, compute storagePath by stripping bucket
+    if (!finalStoragePath && finalGsUri && finalGsUri.startsWith('gs://')) {
+      const without = finalGsUri.replace(/^gs:\/\//i, '')
+      const idx = without.indexOf('/')
+      if (idx >= 0) {
+        finalStoragePath = without.slice(idx + 1)
+      }
+    }
+    // If storagePath provided but no gsUri, compute gsUri using configured bucket
+    if (finalStoragePath && !finalGsUri) {
+      const bucketName = (admin && admin.getBucketName && admin.getBucketName()) || null
+      if (bucketName) finalGsUri = `gs://${bucketName}/${finalStoragePath}`
+    }
 
-    const inputSpec = { storagePath }
-    if (computedGs) inputSpec.gsUri = computedGs
+    const inputSpec = {}
+    if (finalStoragePath) inputSpec.storagePath = finalStoragePath
+    if (finalGsUri) inputSpec.gsUri = finalGsUri
     if (downloadURL) inputSpec.downloadURL = downloadURL
+
+    // Optionally validate that the storagePath exists in the bucket
+    try {
+      if (finalStoragePath && admin && admin.getBucket) {
+        try {
+          const b = admin.getBucket()
+          const remote = b.file(finalStoragePath)
+          const [exists] = await remote.exists()
+          if (!exists) {
+            // do not fail job creation — just warn and continue
+            console.warn('[jobs] POST: provided storagePath does not exist yet in bucket', finalStoragePath)
+          }
+        } catch (e) {
+          console.warn('[jobs] POST: validation check failed', e && e.message)
+        }
+      }
+    } catch (e) {}
 
     // Persist job to Firestore using standardized schema
     try {
