@@ -474,12 +474,14 @@ try {
 // Signed upload URL endpoint (direct-to-storage)
 app.post('/api/upload-url', async (req, res) => {
   try {
-    const { fileName, contentType } = req.body
+    const body = req.body || {}
+    const fileName = body.fileName || body.filename || body.file_name || null
+    const contentType = body.contentType || body.content_type || body.contenttype || null
+
+    console.log('[upload-url] request body keys:', Object.keys(body))
 
     if (!fileName || !contentType) {
-      return res.status(400).json({
-        error: 'fileName and contentType are required'
-      })
+      return res.status(400).json({ error: 'fileName and contentType are required' })
     }
 
     // Temporary debug: surface key values for troubleshooting
@@ -510,11 +512,8 @@ app.post('/api/upload-url', async (req, res) => {
     })
 
   } catch (error) {
-    console.error('[upload-url] ERROR:', error)
-    return res.status(500).json({
-      error: 'Failed to generate signed URL',
-      details: error.message
-    })
+    console.error('[upload-url] ERROR:', error && (error.stack || error.message || error))
+    return res.status(500).json({ error: 'Failed to generate signed URL', details: error && error.message })
   }
 })
 try { console.log('Mounted /api/upload') } catch (e) {}
