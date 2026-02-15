@@ -24,6 +24,14 @@ router.post('/', async (req, res) => {
       bucket = null
     }
 
+    try {
+      console.log('[upload-url] resolved bucket:', bucket && (bucket.name || bucket.id || '<unknown>'))
+      console.log('[upload-url] filename:', fileName)
+      console.log('[upload-url] contentType:', contentType)
+    } catch (e) {
+      console.warn('[upload-url] debug log failed', e)
+    }
+
     if (!bucket) return res.status(500).json({ ok: false, error: 'Storage bucket not configured' })
 
     const storagePath = `uploads/${Date.now()}-${fileName}`
@@ -33,7 +41,7 @@ router.post('/', async (req, res) => {
       const [uploadUrl] = await file.getSignedUrl({
         version: 'v4',
         action: 'write',
-        expires: Date.now() + 15 * 60 * 1000,
+        expires: new Date(Date.now() + 15 * 60 * 1000),
         contentType,
       })
 

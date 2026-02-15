@@ -482,6 +482,15 @@ app.post('/api/upload-url', async (req, res) => {
       })
     }
 
+    // Temporary debug: surface key values for troubleshooting
+    try {
+      console.log('[upload-url] Bucket:', bucket && (bucket.name || bucket.id || '<unknown>'))
+      console.log('[upload-url] Filename:', fileName)
+      console.log('[upload-url] ContentType:', contentType)
+    } catch (e) {
+      console.warn('[upload-url] failed to log debug values', e)
+    }
+
     const storagePath = `uploads/${Date.now()}-${fileName}`
 
     const file = bucket.file(storagePath)
@@ -489,7 +498,7 @@ app.post('/api/upload-url', async (req, res) => {
     const [uploadUrl] = await file.getSignedUrl({
       version: 'v4',
       action: 'write',
-      expires: Date.now() + 15 * 60 * 1000,
+      expires: new Date(Date.now() + 15 * 60 * 1000),
       contentType
     })
 
