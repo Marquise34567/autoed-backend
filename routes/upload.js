@@ -9,7 +9,6 @@ module.exports = router
 router.post('/', upload.single('file'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ ok: false, error: 'No file uploaded' })
-
     const admin = require('../utils/firebaseAdmin')
     const bucketName = process.env.FIREBASE_STORAGE_BUCKET
     if (!bucketName) return res.status(500).json({ ok: false, error: 'FIREBASE_STORAGE_BUCKET not configured' })
@@ -20,11 +19,22 @@ router.post('/', upload.single('file'), async (req, res) => {
 
     const file = bucket.file(storagePath)
 
-    await file.save(req.file.buffer, {
-      metadata: {
-        contentType: req.file.mimetype || 'application/octet-stream',
-      },
-    })
+    // Save file to storage with guarded error handling
+    try {
+      await file.save(req.file.buffer, {
+        metadata: {
+          contentType: req.file.mimetype || 'application/octet-stream',
+        },
+      })
+    } catch (storageErr) {
+      console.error('[upload] Storage save failed', {
+        message: storageErr && storageErr.message,
+        code: storageErr && storageErr.code,
+        stack: storageErr && storageErr.stack,
+        raw: storageErr,
+      })
+      return res.status(500).json({ ok: false, error: 'Storage save failed', message: storageErr && storageErr.message })
+    }
 
     // Try to get a signed URL (1 hour). If it fails, return a storagePath only.
     let downloadUrl = null
@@ -37,7 +47,13 @@ router.post('/', upload.single('file'), async (req, res) => {
 
     return res.json({ ok: true, storagePath, downloadUrl })
   } catch (err) {
-    console.error('[upload] error', err && (err.stack || err.message || err))
-    return res.status(500).json({ ok: false, error: err && err.message ? err.message : 'Upload failed' })
+    console.error('[upload] error', {
+      message: err && err.message,
+      code: err && err.code,
+      details: err && err.details,
+      stack: err && err.stack,
+      raw: err,
+    })
+    return res.status(500).json({ ok: false, error: 'Upload failed', message: err && err.message })
   }
 })
