@@ -29,34 +29,9 @@ const app = express()
 
 const cors = require('cors')
 
-const allowedOrigins = [
-  'https://www.autoeditor.app',
-  'https://autoeditor.app',
-  'http://localhost:3000',
-]
-
-const corsOptions = {
-  origin: function (origin, callback) {
-    try {
-      if (!origin) return callback(null, true)
-      // normalize origin by stripping trailing slash
-      const norm = String(origin).replace(/\/$/, '')
-      const allowed = allowedOrigins.some(o => o === norm || o === origin)
-      console.log('[cors] origin check', { origin, norm, allowed })
-      if (allowed) return callback(null, origin)
-      return callback(null, false)
-    } catch (e) {
-      return callback(null, false)
-    }
-  },
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true,
-}
-
-// Mount CORS before any routes
-app.use(cors(corsOptions))
-app.options('*', cors(corsOptions))
+// Minimal CORS: allow all origins via the `cors` default for simplicity
+// (Next.js proxy handles origin restrictions in production)
+app.use(cors())
 
 // Log CORS origin on every request for deploy verification
 app.use((req, res, next) => {
