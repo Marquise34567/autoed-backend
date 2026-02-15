@@ -567,6 +567,20 @@ app.get('/api/jobs', (req, res) => {
 // Signed-upload endpoints removed to enforce client-side Firebase SDK uploads.
 
 // Return JSON for missing API routes instead of HTML
+// Debug routes for /api/upload-url — must be placed before the API 404 handler
+app.get('/api/upload-url', (req, res) => {
+  return res.status(200).json({ ok: true, route: '/api/upload-url', method: 'GET' })
+})
+
+app.post('/api/upload-url', (req, res) => {
+  // Echo body for route-wiring test; will be replaced with signed-URL logic after verification
+  try {
+    return res.status(200).json({ ok: true, route: '/api/upload-url', method: 'POST', body: req.body || null })
+  } catch (e) {
+    return res.status(500).json({ error: 'Server error', detail: e && (e.stack || e.message) })
+  }
+})
+
 app.use((req, res, next) => {
   if (req.path && req.path.startsWith('/api/')) {
     return res.status(404).json({ ok: false, error: 'Not found', path: req.originalUrl })
@@ -588,7 +602,10 @@ app.use((err, req, res, next) => {
   }
   if (req.path && req.path.startsWith('/api/')) {
     const status = err && err.status ? err.status : 500
-    return res.status(status).json({ ok: false, error: err && err.message ? err.message : 'Server error' })
+    const error = err && err.message ? err.message : 'Server error'
+    const detail = err && (err.stack || err.details || null)
+    res.status(status).json({ error, detail })
+    return
   }
   return next(err)
 })
