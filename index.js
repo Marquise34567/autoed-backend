@@ -476,9 +476,9 @@ app.use((err, req, res, next) => {
 
 // Standard health + root endpoints under /api
 // Mirror `/health` so proxy paths like `/api/proxy/health` -> `/api/health`
-app.get('/api/health', (_req, res) => {
-  return res.json({ ok: true })
-})
+app.get("/api/health", (req, res) => {
+  res.status(200).json({ status: "ok", where: "api/health" });
+});
 app.get('/', (_req, res) => res.json({ message: 'autoed-backend-ready' }))
 
 // Diagnostic: deployment marker to confirm which code is running in production
@@ -488,14 +488,9 @@ app.get('/__deploy', (_req, res) => {
 
 // Minimal fallbacks so endpoints respond even if route modules aren't mounted in the image
 app.get('/api/ping', (_req, res) => res.json({ pong: true }))
-app.get('/api/userdoc', (_req, res) => {
-  try {
-    return res.status(200).json({ ok: true, uid: null, plan: 'starter', rendersLeft: 12 })
-  } catch (e) {
-    console.error('[api/userdoc] unexpected error', e && (e.stack || e.message || e))
-    return res.status(200).json({ ok: true, uid: null, plan: 'starter', rendersLeft: 12 })
-  }
-})
+app.get("/api/userdoc", (req, res) => {
+  res.status(200).json({ ok: true, uid: null, plan: "starter", rendersLeft: 12 });
+});
 // Minimal fallbacks so endpoints respond even if route modules aren't mounted in the image
 // (More specific POST /api/upload-url fallback moved below so mounted router is used first.)
 
@@ -573,10 +568,9 @@ app.get('/api/jobs', (req, res) => {
 
 // Top-level POST/GET fallbacks for /api/upload-url to guard against missing mounted router
 // This runs AFTER mounts, so if the mounted router exists it will take precedence.
-app.post('/api/upload-url', (req, res) => {
-  console.log('[upload-url] fallback POST handler invoked')
-  return res.status(200).json({ ok: false, error: 'signed-url-not-implemented' })
-})
+app.post("/api/upload-url", (req, res) => {
+  res.status(200).json({ ok: false, error: "signed-url-not-implemented" });
+});
 app.get('/api/upload-url', (req, res) => {
   console.log('[upload-url] fallback GET handler invoked')
   return res.status(200).json({ ok: false, error: 'signed-url-not-implemented' })
