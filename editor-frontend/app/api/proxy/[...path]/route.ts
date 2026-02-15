@@ -4,7 +4,9 @@ const BACKEND = process.env.API_PROXY_TARGET || process.env.NEXT_PUBLIC_API_BASE
 
 async function forward(request: NextRequest, params: { path?: string[] }) {
   try {
-    const path = (params.path || []).join('/')
+    let path = (params.path || []).join('/')
+    // Ensure forwarded path always includes the top-level `api` segment so backend routes match.
+    if (path && !path.startsWith('api/')) path = `api/${path}`
     const target = `${BACKEND.replace(/\/$/, '')}/${path}`
 
     // Clone headers (exclude host)
