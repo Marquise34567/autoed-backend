@@ -1,0 +1,26 @@
+node_modules
+.env
+.env.local
+*.log
+build
+dist
+coverage
+tmp
+uploads
+# Build / cache / outputs
+.next
+.cache
+renders
+dist
+build
+
+# Node
+node_modules
+
+# Firebase admin keys
+*adminsdk*.json
+serviceAccount*.json
+firebase-adminsdk*.json
+service-account.json
+.vercel
+.env*.local

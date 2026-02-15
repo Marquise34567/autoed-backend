@@ -1,0 +1,17 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,body,#__next{height:100%}
+body{
+  @apply bg-gradient-to-br from-gray-900 via-zinc-900 to-black text-gray-200 antialiased;
+}
+
+.glass {
+  background: rgba(15, 15, 20, 0.55);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255,255,255,0.05);
+}
+
+.soft-glow:hover{box-shadow:0 6px 24px rgba(124,58,237,0.14)}
