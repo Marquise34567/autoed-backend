@@ -6,6 +6,7 @@
     "dev": "node index.js",
     "build": "tsc -p .",
     "start": "node index.js",
+    "worker": "node worker.js",
     "set:gcs:cors": "node scripts/set-gcs-cors.js",
     "e2e:run": "node scripts/e2e/upload_e2e.js"
   },

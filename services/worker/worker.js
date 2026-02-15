@@ -29,7 +29,8 @@ async function claimOne() {
       const snap = await tx.get(ref)
       const data = snap.exists ? snap.data() : null
       if (!data) return null
-      if (data.status && data.status !== 'queued') return null
+      // Accept only jobs that are explicitly QUEUED (case-insensitive)
+      if (data.status && String(data.status).toUpperCase() !== 'QUEUED') return null
       tx.update(ref, { status: 'PROCESSING', progress: 0, startedAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: Date.now() })
       return { id: ref.id, data }
     })
