@@ -485,6 +485,13 @@ app.use("/api/jobs", require("./routes/jobs"))
 app.use("/jobs", require("./routes/jobs"))
 app.use('/api/job-status', require('./routes/job-status'))
 app.use('/api/userdoc', require('./routes/userdoc'))
+// Compatibility mounts: accept requests forwarded with or without /api and /proxy
+app.use('/userdoc', require('./routes/userdoc'))
+app.use('/proxy/userdoc', require('./routes/userdoc'))
+app.use('/api/proxy/userdoc', require('./routes/userdoc'))
+app.use('/api/proxy/api/userdoc', require('./routes/userdoc'))
+app.use('/api/proxy/jobs', require('./routes/jobs'))
+app.use('/api/proxy/api/jobs', require('./routes/jobs'))
 // Upload endpoint: accepts multipart/form-data and uploads to Firebase Storage
 try {
   app.use('/api/upload', require('./routes/upload'))
