@@ -16,7 +16,11 @@ function Uploader(){
       // Call the deployed backend directly using NEXT_PUBLIC_API_URL
       const backendBase = (process.env.NEXT_PUBLIC_API_URL || '').replace(/\/$/, '')
       console.log('[frontend] requesting signed URL', { filename: file.name, contentType })
-      const resp = await fetch(`${backendBase}/api/upload-url`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filename: file.name }) })
+      const resp = await fetch(`${backendBase}/api/upload-url`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename: file.name, contentType })
+      })
       if (!resp.ok) {
         const txt = await resp.text()
         throw new Error(`Signed URL request failed: ${resp.status} ${txt}`)
