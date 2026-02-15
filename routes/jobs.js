@@ -327,21 +327,22 @@ router.post('/', async (req, res) => {
     if (computedGs) inputSpec.gsUri = computedGs
     if (downloadURL) inputSpec.downloadURL = downloadURL
 
-    // Persist job to Firestore
+    // Persist job to Firestore using standardized schema
     try {
       const now = admin.firestore.FieldValue.serverTimestamp()
       await db.collection('jobs').doc(jobId).set({
         id: jobId,
         uid: null,
-        status: 'QUEUED',
+        status: 'queued',
         progress: 0,
         createdAt: now,
         updatedAt: now,
-        inputSpec,
+        input: inputSpec,
         filename: filename || null,
         contentType: contentType || null,
-        errorMessage: null,
-        result: null,
+        lockedAt: null,
+        workerId: null,
+        error: null,
       }, { merge: true })
     } catch (e) {
       console.error('[jobs] failed to persist job to Firestore', e && (e.message || e))
@@ -353,7 +354,7 @@ router.post('/', async (req, res) => {
     job.inputSpec = inputSpec
     jobs.set(jobId, job)
 
-    console.log('[jobs] create', { jobId, storagePath, downloadURL, filename, contentType, smartZoom })
+    console.log('[jobs] created', jobId, 'status=queued', { storagePath, downloadURL, filename, contentType, smartZoom })
 
     try {
       enqueue(jobId, inputSpec)
@@ -363,7 +364,7 @@ router.post('/', async (req, res) => {
     }
 
     // Return consistent API contract to frontend
-    return res.status(201).json({ id: jobId, status: 'QUEUED' })
+    return res.status(201).json({ id: jobId, status: 'queued' })
   } catch (err) {
     console.error('[jobs] POST error', err && (err.stack || err.message || err))
     return res.status(500).json({ ok: false, errorMessage: 'Internal server error' })

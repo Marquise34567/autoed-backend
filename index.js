@@ -200,6 +200,21 @@ app.get('/api/debug/firestore', wrapAsync(async (req, res) => {
   }
 }))
 
+// Debug: queued jobs count and Firestore info
+app.get('/api/debug/jobs/queued-count', wrapAsync(async (req, res) => {
+  try {
+    if (!db) return res.status(503).json({ ok: false, error: 'Firestore not configured' })
+    const proj = (admin && admin.options && admin.options.credential && admin.options.credential.projectId) || process.env.FIREBASE_PROJECT_ID || '<unknown>'
+    console.log('[debug] reading Firestore project:', proj, 'collection=jobs')
+    const q = await db.collection('jobs').where('status', '==', 'queued').get()
+    const cnt = q && typeof q.size === 'number' ? q.size : (q && q.docs ? q.docs.length : 0)
+    return res.json({ queuedCount: cnt })
+  } catch (err) {
+    console.error('[debug] /api/debug/jobs/queued-count error', err && (err.stack || err.message || err))
+    return res.status(500).json({ ok: false, error: err && err.message })
+  }
+}))
+
 // IMPORTANT: Do not register global `express.json()` before the webhook route
 // The webhook requires the raw request body for signature verification.
 app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
