@@ -7,7 +7,11 @@ let isProcessing = false
 
 function log(...args) { console.log('[queue]', ...args) }
 
+// If WORKER_IN_PROCESS is true, keep the legacy in-process queue behavior
+const WORKER_IN_PROCESS = String(process.env.WORKER_IN_PROCESS || 'false').toLowerCase() === 'true'
+
 async function processNext() {
+  if (!WORKER_IN_PROCESS) return
   if (isProcessing) return
   const item = queue.shift()
   if (!item) {
@@ -45,17 +49,17 @@ async function processNext() {
 }
 
 function enqueue(jobId, inputSpec) {
+  // When running in API mode, avoid doing heavy processing in-process.
+  // If WORKER_IN_PROCESS is enabled, behave as before for local/dev convenience.
   queue.push({ jobId, inputSpec })
-  log('Enqueued', jobId)
-  // kick the queue
-  setImmediate(() => processNext())
+  log('Enqueued', jobId, 'inProcessMode=', WORKER_IN_PROCESS)
+  if (WORKER_IN_PROCESS) setImmediate(() => processNext())
 }
 
 function reenqueue(jobId, inputSpec) {
-  // place at front
   queue.unshift({ jobId, inputSpec })
-  log('Re-enqueued', jobId)
-  setImmediate(() => processNext())
+  log('Re-enqueued', jobId, 'inProcessMode=', WORKER_IN_PROCESS)
+  if (WORKER_IN_PROCESS) setImmediate(() => processNext())
 }
 
 function listQueued() { return queue.map(i => i.jobId) }

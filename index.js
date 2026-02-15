@@ -1,6 +1,8 @@
-// Ensure verbose gRPC errors and global crash visibility BEFORE any imports
-process.env.GRPC_TRACE = process.env.GRPC_TRACE || 'all'
-process.env.GRPC_VERBOSITY = process.env.GRPC_VERBOSITY || 'DEBUG'
+// Global crash visibility BEFORE any imports
+if (process.env.NODE_ENV !== 'production') {
+  process.env.GRPC_TRACE = process.env.GRPC_TRACE || 'all'
+  process.env.GRPC_VERBOSITY = process.env.GRPC_VERBOSITY || 'DEBUG'
+}
 
 process.on('unhandledRejection', (err) => {
   console.error('🚨 UNHANDLED REJECTION 🚨', err)
@@ -106,6 +108,53 @@ if (stripeKey && stripeKey.startsWith("sk_")) {
 
 const admin = require('./utils/firebaseAdmin')
 
+// Firestore instance for debug routes and helpers
+const db = admin.firestore()
+
+// Helper: cleanly log Firestore / gRPC errors with structured JSON
+function logFirestoreError(err, context = {}) {
+  try {
+    const payload = {
+      tag: 'FIRESTORE_ERROR',
+      context: context || {},
+      message: err && (err.message || String(err)),
+      code: err && err.code,
+      details: err && err.details,
+      name: err && err.name,
+      stack: err && err.stack,
+    }
+    const msg = String((err && err.message) || '')
+    const m = msg.match(/^(\d+)\s+([A-Z_]+):/)
+    if (m) {
+      payload.grpc_status_number = Number(m[1])
+      payload.grpc_status_name = m[2]
+    }
+    console.error(JSON.stringify(payload, null, 2))
+  } catch (e) {
+    console.error('[logFirestoreError] failed to stringify error', e, err)
+  }
+}
+
+// async wrapper and auto-wrap Router to catch unhandled promise rejections
+const wrapAsync = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next)
+try {
+  const Router = express.Router
+  const proto = Router && Router.prototype
+  if (proto) {
+    const methods = ['get', 'post', 'put', 'delete', 'patch', 'options', 'head', 'all', 'use']
+    methods.forEach((m) => {
+      const orig = proto[m]
+      if (!orig) return
+      proto[m] = function (...args) {
+        const wrapped = args.map((a) => (typeof a === 'function' && a.length < 4 ? wrapAsync(a) : a))
+        return orig.apply(this, wrapped)
+      }
+    })
+  }
+} catch (e) {
+  console.warn('[startup] failed to patch Router for async safety', e && e.message ? e.message : e)
+}
+
 // Worker starter (starts loop when WORKER_ENABLED=true)
 let worker = null
 try {
@@ -124,6 +173,17 @@ app.get('/api/firebase-check', (req, res) => {
     return res.status(500).json({ ok: false, error: e && e.message ? e.message : String(e) })
   }
 })
+
+// Debug endpoint to surface Firestore errors clearly
+app.get('/api/debug/firestore', wrapAsync(async (req, res) => {
+  try {
+    const snap = await db.collection('jobs').limit(1).get()
+    return res.json({ ok: true, size: snap.size })
+  } catch (err) {
+    logFirestoreError(err, { where: 'GET /api/debug/firestore', op: 'jobs.limit(1).get' })
+    return res.status(500).json({ ok: false, message: err?.message, code: err?.code })
+  }
+}))
 
 // IMPORTANT: Do not register global `express.json()` before the webhook route
 // The webhook requires the raw request body for signature verification.
@@ -446,7 +506,15 @@ app.use((req, res, next) => {
 // Generic error handler that returns JSON for API routes
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
-  console.error('[error] ', err && (err.stack || err.message || err))
+  try {
+    if (err && (String(err && err.message || '').toLowerCase().includes('firestore') || err && err.code)) {
+      logFirestoreError(err, { where: 'GLOBAL_HANDLER', route: req.originalUrl, method: req.method })
+    } else {
+      console.error('[error] ', err && (err.stack || err.message || err))
+    }
+  } catch (e) {
+    console.error('[error] failed logging error', e)
+  }
   if (req.path && req.path.startsWith('/api/')) {
     const status = err && err.status ? err.status : 500
     return res.status(status).json({ ok: false, error: err && err.message ? err.message : 'Server error' })
