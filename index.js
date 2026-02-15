@@ -164,6 +164,23 @@ app.get('/api/firebase-check', (req, res) => {
   }
 })
 
+// Debug endpoint: return non-sensitive Firebase admin info for diagnostics
+app.get('/api/debug/firebase-info', (req, res) => {
+  try {
+    if (!admin) return res.status(503).json({ ok: false, error: 'Firebase not configured' })
+    const info = {
+      projectId: (admin && admin.options && admin.options.credential && admin.options.credential.projectId) || process.env.FIREBASE_PROJECT_ID || null,
+      clientEmail: (admin && admin.options && admin.options.credential && admin.options.credential.clientEmail) || process.env.FIREBASE_CLIENT_EMAIL || null,
+      hasBucket: !!bucket,
+      bucketName: bucket && (bucket.name || bucket.id) || process.env.FIREBASE_STORAGE_BUCKET || null,
+    }
+    return res.json({ ok: true, info })
+  } catch (e) {
+    console.error('[debug/firebase-info] error', e && (e.stack || e.message || e))
+    return res.status(500).json({ ok: false, error: e && e.message })
+  }
+})
+
 // Debug endpoint to surface Firestore errors clearly
 app.get('/api/debug/firestore', wrapAsync(async (req, res) => {
   try {
