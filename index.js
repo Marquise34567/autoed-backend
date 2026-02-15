@@ -468,6 +468,11 @@ try {
 } catch (e) {
   console.warn('[routes] failed to mount /api/upload', e && e.message ? e.message : e)
 }
+try {
+  app.use('/api/upload-url', require('./routes/upload-url'))
+} catch (e) {
+  console.warn('[routes] failed to mount /api/upload-url', e && e.message ? e.message : e)
+}
 try { console.log('Mounted /api/upload') } catch (e) {}
 // Signed-upload endpoints removed to enforce client-side Firebase SDK uploads.
 // Debug routes removed (signed URL debug endpoints disabled)
