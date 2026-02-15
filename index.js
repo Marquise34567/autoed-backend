@@ -567,19 +567,19 @@ app.get('/api/jobs', (req, res) => {
 // Signed-upload endpoints removed to enforce client-side Firebase SDK uploads.
 
 // Return JSON for missing API routes instead of HTML
-// Debug routes for /api/upload-url — must be placed before the API 404 handler
-app.get('/api/upload-url', (req, res) => {
-  return res.status(200).json({ ok: true, route: '/api/upload-url', method: 'GET' })
+// If the mounted `/api/upload-url` router failed to load, return a clear JSON 404
+app.use('/api/upload-url', (_req, res) => {
+  return res.status(404).json({ ok: false, error: 'Upload URL service unavailable on this instance' })
 })
 
-app.post('/api/upload-url', (req, res) => {
-  // Echo body for route-wiring test; will be replaced with signed-URL logic after verification
+// Backwards-compatible proxy route: some frontends call `/api/proxy/upload-url`.
+// Redirect with 307 (preserve method) to the canonical `/api/upload-url` route.
+app.all('/api/proxy/upload-url', (req, res) => {
   try {
-    return res.status(200).json({ ok: true, route: '/api/upload-url', method: 'POST', body: req.body || null })
+    return res.redirect(307, '/api/upload-url')
   } catch (e) {
-    return res.status(500).json({ error: 'Server error', detail: e && (e.stack || e.message) })
+    return res.status(500).json({ ok: false, error: 'Proxy redirect failed', detail: e && e.message })
   }
-})
 
 app.use((req, res, next) => {
   if (req.path && req.path.startsWith('/api/')) {
