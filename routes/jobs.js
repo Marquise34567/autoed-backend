@@ -180,6 +180,8 @@ router.get('/', async (req, res) => {
           let job = snap.data()
           try { job = await attachSignedUrlsToJob(job, 30) } catch (e) {}
           job = normalizeJobRecord(job)
+          // normalize status to lowercase for API contract
+          job.status = (job.status || '').toString().toLowerCase()
           return res.status(200).json({ ok: true, job })
         }
       }
@@ -196,6 +198,8 @@ router.get('/', async (req, res) => {
       snaps.forEach(s => arr.push(s.data()))
       try { arr = await Promise.all(arr.map(j => attachSignedUrlsToJob(j, 30))) } catch (e) {}
       arr = arr.map(normalizeJobRecord)
+      // normalize statuses
+      arr = arr.map(j => ({ ...j, status: (j.status || '').toString().toLowerCase() }))
       return res.status(200).json({ ok: true, jobs: arr, queued: listQueued() })
     }
     let arr = Array.from(jobs.values())
@@ -235,10 +239,10 @@ router.get('/:id', async (req, res) => {
     job = normalizeJobRecord(job)
     const out = {
       id: job.id,
-      status: job.status,
+      status: (job.status || '').toString().toLowerCase(),
       progress: job.progress,
       errorMessage: job.errorMessage || null,
-      resultUrl: job.resultUrl || job.outputUrl || null
+      downloadUrl: job.resultUrl || job.outputUrl || job.videoUrl || null
     }
     return res.status(200).json({ ok: true, job: out })
   } catch (e) {

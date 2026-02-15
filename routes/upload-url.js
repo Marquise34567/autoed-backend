@@ -1,59 +1,83 @@
 const express = require('express')
+const crypto = require('crypto')
 const router = express.Router()
 
 const admin = require('../utils/firebaseAdmin')
 
+function sanitizeFilename(name) {
+  if (!name) return 'file'
+  return String(name).replace(/[^a-zA-Z0-9.\-_ ]/g, '_').slice(0, 240)
+}
+
 router.post('/', async (req, res) => {
   try {
     const body = req.body || {}
-    const fileName = body.fileName || body.file_name || null
+    const filename = body.filename || body.fileName || body.file_name || null
     const contentType = body.contentType || body.content_type || null
+    const size = body.size || null
 
-    if (!fileName) return res.status(400).json({ ok: false, error: 'Missing fileName' })
-    if (!contentType) return res.status(400).json({ ok: false, error: 'Missing contentType' })
+    if (!filename || !contentType) return res.status(400).json({ ok: false, error: 'Missing filename or contentType' })
+
+    if (admin && admin._missingEnv) return res.status(500).json({ ok: false, error: 'Missing required env vars', missing: admin._missingEnv })
+
+    const jobId = (crypto.randomUUID && crypto.randomUUID()) || `${Date.now()}-${Math.floor(Math.random()*100000)}`
+    const safe = sanitizeFilename(filename)
+    const storagePath = `uploads/anon/${jobId}/${safe}`
 
     // Resolve bucket
     let bucket = null
     try {
-      if (admin && typeof admin.getBucket === 'function') {
-        bucket = admin.getBucket()
-      } else if (admin && admin.storage) {
-        bucket = admin.storage().bucket()
-      }
+      if (admin && typeof admin.getBucket === 'function') bucket = admin.getBucket()
+      else if (admin && admin.storage) bucket = admin.storage().bucket(process.env.FIREBASE_STORAGE_BUCKET)
     } catch (e) {
+      console.warn('[upload-url] failed to resolve bucket', e && e.message)
       bucket = null
-    }
-
-    try {
-      console.log('[upload-url] resolved bucket:', bucket && (bucket.name || bucket.id || '<unknown>'))
-      console.log('[upload-url] filename:', fileName)
-      console.log('[upload-url] contentType:', contentType)
-    } catch (e) {
-      console.warn('[upload-url] debug log failed', e)
     }
 
     if (!bucket) return res.status(500).json({ ok: false, error: 'Storage bucket not configured' })
 
-    const storagePath = `uploads/${Date.now()}-${fileName}`
     const file = bucket.file(storagePath)
 
+    // Generate V4 signed URL for PUT and require contentType
+    let uploadUrl
     try {
-      // Do not sign Content-Type header (clients may set it freely)
-      const [uploadUrl] = await file.getSignedUrl({
+      const [url] = await file.getSignedUrl({
         version: 'v4',
         action: 'write',
-        expires: new Date(Date.now() + 15 * 60 * 1000),
+        expires: Date.now() + 15 * 60 * 1000,
+        contentType: contentType,
       })
-
-      console.log('[upload-url] generated', storagePath)
-      return res.json({ uploadUrl, storagePath })
+      uploadUrl = url
     } catch (e) {
-      console.error('[upload-url] failed to generate signed URL', e && (e.stack || e.message || e))
-      return res.status(500).json({ ok: false, error: 'Failed to generate upload URL', message: e && e.message })
+      console.error('[upload-url] signed URL error', e && (e.stack || e.message || e))
+      return res.status(500).json({ ok: false, error: 'Failed to generate signed URL', detail: e && e.message })
     }
+
+    // Persist an initial job document so start can validate existence later
+    try {
+      if (admin && admin.db) {
+        const now = admin.firestore.FieldValue.serverTimestamp()
+        await admin.db.collection('jobs').doc(jobId).set({
+          id: jobId,
+          uid: null,
+          status: 'created',
+          progress: 0,
+          createdAt: now,
+          updatedAt: now,
+          storagePath,
+          filename: safe,
+          contentType: contentType,
+          size: size || null,
+        }, { merge: true })
+      }
+    } catch (e) {
+      console.warn('[upload-url] failed to persist job doc', e && e.message)
+    }
+
+    return res.status(200).json({ uploadUrl, storagePath, jobId })
   } catch (err) {
     console.error('[upload-url] error', err && (err.stack || err.message || err))
-    return res.status(500).json({ ok: false, error: 'Server error' })
+    return res.status(500).json({ ok: false, error: 'Server error', detail: err && err.message })
   }
 })
 
