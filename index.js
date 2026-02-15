@@ -71,16 +71,16 @@ const stripeKey = process.env.STRIPE_SECRET_KEY;
 
 let stripe = null;
 
-if (stripeKey && stripeKey.startsWith("sk_")) {
+if (stripeKey && typeof stripeKey === 'string' && stripeKey.startsWith("sk_")) {
   try {
     stripe = new Stripe(stripeKey, { apiVersion: "2024-06-20" });
-    console.log("Stripe initialized");
+    console.log('[startup] Stripe initialized');
   } catch (e) {
-    console.warn("⚠️ Failed to initialize Stripe:", e);
+    console.warn('[startup] Failed to initialize Stripe:', e && (e.message || e))
     stripe = null;
   }
 } else {
-  console.warn("⚠️ STRIPE_SECRET_KEY missing/invalid — billing disabled.");
+  console.warn('[startup] STRIPE_SECRET_KEY missing — billing disabled');
 }
 
 // Use a safe firebase admin initializer that tolerates missing/invalid envs
@@ -442,7 +442,18 @@ app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res)
 // so API routes receive parsed bodies (webhook above still uses raw).
 app.use(express.json({ limit: '2mb' }))
 app.use(express.urlencoded({ extended: true }))
-// Guard API routes when required envs are missing (return JSON error)
+// Ensure critical API routes are available even if Firebase envs are missing.
+app.get('/api/health', (req, res) => {
+  return res.status(200).json({ status: 'ok', where: 'api/health' })
+})
+app.get('/api/userdoc', (req, res) => {
+  return res.status(200).json({ ok: true, uid: null, plan: 'starter', rendersLeft: 12 })
+})
+app.post('/api/upload-url', (req, res) => {
+  return res.status(200).json({ ok: false, error: 'signed-url-not-implemented' })
+})
+
+// Guard other API routes when required envs are missing (return JSON error)
 app.use('/api', (req, res, next) => {
   if (MISSING_ENV_VARS) return res.status(500).json({ ok: false, error: 'Missing required env vars', missing: MISSING_ENV_VARS })
   return next()
