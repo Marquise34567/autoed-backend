@@ -38,11 +38,11 @@ router.post('/', async (req, res) => {
     const file = bucket.file(storagePath)
 
     try {
+      // Do not sign Content-Type header (clients may set it freely)
       const [uploadUrl] = await file.getSignedUrl({
         version: 'v4',
         action: 'write',
         expires: new Date(Date.now() + 15 * 60 * 1000),
-        contentType,
       })
 
       console.log('[upload-url] generated', storagePath)

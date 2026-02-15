@@ -506,11 +506,11 @@ app.post('/api/upload-url', async (req, res) => {
 
     const file = bucket.file(storagePath)
 
+    // Generate signed URL without signing Content-Type to avoid signature mismatch
     const [uploadUrl] = await file.getSignedUrl({
       version: 'v4',
       action: 'write',
       expires: new Date(Date.now() + 15 * 60 * 1000),
-      contentType
     })
 
     console.log('[upload-url] generated:', storagePath)
