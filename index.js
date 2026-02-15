@@ -308,6 +308,12 @@ app.use("/api/jobs", require("./routes/jobs"))
 app.use("/jobs", require("./routes/jobs"))
 app.use('/api/job-status', require('./routes/job-status'))
 app.use('/api/userdoc', require('./routes/userdoc'))
+// Upload endpoint: accepts multipart/form-data and uploads to Firebase Storage
+try {
+  app.use('/api/upload', require('./routes/upload'))
+} catch (e) {
+  console.warn('[routes] failed to mount /api/upload', e && e.message ? e.message : e)
+}
 // Signed-upload endpoints removed to enforce client-side Firebase SDK uploads.
 // Debug routes removed (signed URL debug endpoints disabled)
 
