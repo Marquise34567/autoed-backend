@@ -63,9 +63,6 @@ app.get('/health', (req, res) => {
   res.status(200).json({ ok: true })
 })
 
-app.get('/api/health', (req, res) => {
-  res.status(200).json({ status: 'ok' })
-})
 
 // Stripe + Firebase for webhook
 const Stripe = require("stripe");
@@ -478,8 +475,9 @@ app.use((err, req, res, next) => {
 })
 
 // Standard health + root endpoints under /api
+// Mirror `/health` so proxy paths like `/api/proxy/health` -> `/api/health`
 app.get('/api/health', (_req, res) => {
-  return res.json({ ok: true, deployMarker: DEPLOY_MARKER, time: new Date().toISOString() })
+  return res.json({ ok: true })
 })
 app.get('/', (_req, res) => res.json({ message: 'autoed-backend-ready' }))
 
@@ -490,7 +488,14 @@ app.get('/__deploy', (_req, res) => {
 
 // Minimal fallbacks so endpoints respond even if route modules aren't mounted in the image
 app.get('/api/ping', (_req, res) => res.json({ pong: true }))
-app.get('/api/userdoc', (_req, res) => res.json({ ok: true }))
+app.get('/api/userdoc', (_req, res) => {
+  try {
+    return res.status(200).json({ ok: true, uid: null, plan: 'starter', rendersLeft: 12 })
+  } catch (e) {
+    console.error('[api/userdoc] unexpected error', e && (e.stack || e.message || e))
+    return res.status(200).json({ ok: true, uid: null, plan: 'starter', rendersLeft: 12 })
+  }
+})
 // Minimal fallbacks so endpoints respond even if route modules aren't mounted in the image
 // (More specific POST /api/upload-url fallback moved below so mounted router is used first.)
 
