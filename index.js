@@ -148,161 +148,175 @@ app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res)
   }
 
   const db = admin.firestore()
+  try {
+    // Idempotency: skip if processed
+    if (event && event.id) {
+      const evtRef = db.collection('stripe_events').doc(event.id)
+      const snap = await evtRef.get()
+      if (snap.exists) {
+        console.log('[webhook] duplicate event, already processed', event.id)
+        return res.json({ received: true })
+      }
+      await evtRef.set({ createdAt: admin.firestore.FieldValue.serverTimestamp(), type: event.type }, { merge: true })
+    }
 
-    try {
-      // Idempotency: skip if processed
-      if (event && event.id) {
-        const evtRef = db.collection('stripe_events').doc(event.id)
-        const snap = await evtRef.get()
-        if (snap.exists) {
-          console.log('[webhook] duplicate event, already processed', event.id)
-          return res.json({ received: true })
+    // Handle relevant Stripe events
+    switch (event.type) {
+      case 'checkout.session.completed': {
+        const session = event.data.object
+        const userId = (session.metadata && (session.metadata.userId || session.metadata.uid)) || undefined
+        if (!userId) {
+          console.warn('[webhook] checkout.session.completed missing userId in metadata')
+        } else {
+          try {
+            await db.collection('users').doc(userId).set({
+              subscriptionStatus: 'active',
+              stripeCustomerId: session.customer || undefined,
+              stripeSubscriptionId: session.subscription || undefined,
+              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            }, { merge: true })
+          } catch (err) {
+            console.error('🔥 FIRESTORE FAILURE DETECTED 🔥')
+            console.error('Message:', err && err.message ? err.message : err)
+            console.error('Code:', err && err.code ? err.code : undefined)
+            console.error('Details:', err && err.details ? err.details : undefined)
+            console.error('Metadata:', err && err.metadata ? err.metadata : undefined)
+            try {
+              console.error('Full Error Object:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
+            } catch (e) {
+              console.error('Full Error Object (stringify failed):', err)
+            }
+            throw err
+          }
         }
-        await evtRef.set({ createdAt: admin.firestore.FieldValue.serverTimestamp(), type: event.type }, { merge: true })
+        break
       }
 
-      // Handle relevant Stripe events
-      switch (event.type) {
-        case 'checkout.session.completed': {
-          const session = event.data.object
-          const userId = (session.metadata && (session.metadata.userId || session.metadata.uid)) || undefined
-          if (!userId) {
-            console.warn('[webhook] checkout.session.completed missing userId in metadata')
-          } else {
-            try {
-              await db.collection('users').doc(userId).set({
-                subscriptionStatus: 'active',
-                stripeCustomerId: session.customer || undefined,
-                stripeSubscriptionId: session.subscription || undefined,
-                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-              }, { merge: true })
-            } catch (err) {
-              console.error('🔥 FIRESTORE FAILURE DETECTED 🔥')
-              console.error('Message:', err?.message)
-              console.error('Code:', err?.code)
-              console.error('Details:', err?.details)
-              console.error('Metadata:', err?.metadata)
-              try { console.error('Full Error Object:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2)) } catch (e) { console.error('Full Error Object (stringify failed):', err) }
-              throw err
-            }
-          }
-          break
-        }
+      case 'customer.subscription.created':
+      case 'customer.subscription.updated': {
+        const sub = event.data.object
+        const uidFromMeta = sub.metadata && (sub.metadata.uid || sub.metadata.userId)
+        let userRef = null
 
-        case 'customer.subscription.created':
-        case 'customer.subscription.updated': {
-          const sub = event.data.object
-          const uidFromMeta = sub.metadata && (sub.metadata.uid || sub.metadata.userId)
-          let userRef = null
-
-          if (uidFromMeta) {
-            userRef = db.collection('users').doc(uidFromMeta)
-          } else if (typeof sub.customer === 'string') {
-            try {
-              const q = await db.collection('users').where('stripeCustomerId', '==', sub.customer).limit(1).get()
-              if (!q.empty) userRef = q.docs[0].ref
-            } catch (err) {
-              console.error('🔥 FIRESTORE FAILURE DETECTED 🔥')
-              console.error('Message:', err?.message)
-              console.error('Code:', err?.code)
-              console.error('Details:', err?.details)
-              console.error('Metadata:', err?.metadata)
-              try { console.error('Full Error Object:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2)) } catch (e) { console.error('Full Error Object (stringify failed):', err) }
-              throw err
-            }
-          }
-
-          if (!userRef) {
-            console.warn('[webhook] subscription event but no user found for subscription', sub.id)
-          } else {
-            const plan = (sub.metadata && sub.metadata.plan) || null
-            const status = sub.status
-            const currentPeriodEnd = sub.current_period_end ? sub.current_period_end * 1000 : null
-            try {
-              await userRef.set({
-                stripeCustomerId: typeof sub.customer === 'string' ? sub.customer : undefined,
-                plan,
-                subscriptionStatus: status,
-                currentPeriodEnd,
-                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-                stripeSubscriptionId: sub.id,
-              }, { merge: true })
-              console.log('[webhook] subscription.updated -> user updated', userRef.id, { plan, status })
-            } catch (err) {
-              console.error('🔥 FIRESTORE FAILURE DETECTED 🔥')
-              console.error('Message:', err?.message)
-              console.error('Code:', err?.code)
-              console.error('Details:', err?.details)
-              console.error('Metadata:', err?.metadata)
-              try { console.error('Full Error Object:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2)) } catch (e) { console.error('Full Error Object (stringify failed):', err) }
-              throw err
-            }
-          }
-          break
-        }
-
-        case 'customer.subscription.deleted': {
-          const sub = event.data.object
+        if (uidFromMeta) {
+          userRef = db.collection('users').doc(uidFromMeta)
+        } else if (typeof sub.customer === 'string') {
           try {
-            const q = await db.collection('users').where('stripeSubscriptionId', '==', sub.id).limit(1).get()
-            if (q.empty) {
-              console.warn('[webhook] subscription.deleted but no user found for', sub.id)
-            } else {
+            const q = await db.collection('users').where('stripeCustomerId', '==', sub.customer).limit(1).get()
+            if (!q.empty) userRef = q.docs[0].ref
+          } catch (err) {
+            console.error('🔥 FIRESTORE FAILURE DETECTED 🔥')
+            console.error('Message:', err && err.message ? err.message : err)
+            console.error('Code:', err && err.code ? err.code : undefined)
+            console.error('Details:', err && err.details ? err.details : undefined)
+            console.error('Metadata:', err && err.metadata ? err.metadata : undefined)
+            try {
+              console.error('Full Error Object:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
+            } catch (e) {
+              console.error('Full Error Object (stringify failed):', err)
+            }
+            throw err
+          }
+        }
+
+        if (!userRef) {
+          console.warn('[webhook] subscription event but no user found for subscription', sub.id)
+        } else {
+          const plan = (sub.metadata && sub.metadata.plan) || null
+          const status = sub.status
+          const currentPeriodEnd = sub.current_period_end ? sub.current_period_end * 1000 : null
+          try {
+            await userRef.set({
+              stripeCustomerId: typeof sub.customer === 'string' ? sub.customer : undefined,
+              plan,
+              subscriptionStatus: status,
+              currentPeriodEnd,
+              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+              stripeSubscriptionId: sub.id,
+            }, { merge: true })
+            console.log('[webhook] subscription.updated -> user updated', userRef.id, { plan, status })
+          } catch (err) {
+            console.error('🔥 FIRESTORE FAILURE DETECTED 🔥')
+            console.error('Message:', err && err.message ? err.message : err)
+            console.error('Code:', err && err.code ? err.code : undefined)
+            console.error('Details:', err && err.details ? err.details : undefined)
+            console.error('Metadata:', err && err.metadata ? err.metadata : undefined)
+            try {
+              console.error('Full Error Object:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
+            } catch (e) {
+              console.error('Full Error Object (stringify failed):', err)
+            }
+            throw err
+          }
+        }
+        break
+      }
+
+      case 'customer.subscription.deleted': {
+        const sub = event.data.object
+        try {
+          const q = await db.collection('users').where('stripeSubscriptionId', '==', sub.id).limit(1).get()
+          if (q.empty) {
+            console.warn('[webhook] subscription.deleted but no user found for', sub.id)
+          } else {
+            const ref = q.docs[0].ref
+            await ref.set({
+              plan: 'free',
+              subscriptionStatus: 'canceled',
+              currentPeriodEnd: null,
+              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            }, { merge: true })
+            console.log('[webhook] subscription.deleted -> set user to free', ref.id)
+          }
+        } catch (err) {
+          console.error('🔥 FIRESTORE FAILURE DETECTED 🔥')
+          console.error('Message:', err && err.message ? err.message : err)
+          console.error('Code:', err && err.code ? err.code : undefined)
+          console.error('Details:', err && err.details ? err.details : undefined)
+          console.error('Metadata:', err && err.metadata ? err.metadata : undefined)
+          try {
+            console.error('Full Error Object:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
+          } catch (e) {
+            console.error('Full Error Object (stringify failed):', err)
+          }
+          throw err
+        }
+        break
+      }
+
+      case 'invoice.payment_succeeded': {
+        const invoice = event.data.object
+        const subId = invoice.subscription
+        if (subId) {
+          try {
+            const q = await db.collection('users').where('stripeSubscriptionId', '==', subId).limit(1).get()
+            if (!q.empty) {
               const ref = q.docs[0].ref
               await ref.set({
-                plan: 'free',
-                subscriptionStatus: 'canceled',
-                currentPeriodEnd: null,
+                subscriptionStatus: 'active',
                 updatedAt: admin.firestore.FieldValue.serverTimestamp(),
               }, { merge: true })
-              console.log('[webhook] subscription.deleted -> set user to free', ref.id)
+              console.log('[webhook] invoice.payment_succeeded -> marked active', ref.id)
             }
           } catch (err) {
             console.error('🔥 FIRESTORE FAILURE DETECTED 🔥')
-            console.error('Message:', err?.message)
-            console.error('Code:', err?.code)
-            console.error('Details:', err?.details)
-            console.error('Metadata:', err?.metadata)
-            try { console.error('Full Error Object:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2)) } catch (e) { console.error('Full Error Object (stringify failed):', err) }
+            console.error('Message:', err && err.message ? err.message : err)
+            console.error('Code:', err && err.code ? err.code : undefined)
+            console.error('Details:', err && err.details ? err.details : undefined)
+            console.error('Metadata:', err && err.metadata ? err.metadata : undefined)
+            try {
+              console.error('Full Error Object:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
+            } catch (e) {
+              console.error('Full Error Object (stringify failed):', err)
+            }
             throw err
           }
-          break
         }
-
-        case 'invoice.payment_succeeded': {
-          // Optional: use invoice to mark active if needed
-          const invoice = event.data.object
-          const subId = invoice.subscription
-          if (subId) {
-            try {
-              const q = await db.collection('users').where('stripeSubscriptionId', '==', subId).limit(1).get()
-              if (!q.empty) {
-                const ref = q.docs[0].ref
-                await ref.set({
-                  subscriptionStatus: 'active',
-                  updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-                }, { merge: true })
-                console.log('[webhook] invoice.payment_succeeded -> marked active', ref.id)
-              }
-            } catch (err) {
-              console.error('🔥 FIRESTORE FAILURE DETECTED 🔥')
-              console.error('Message:', err?.message)
-              console.error('Code:', err?.code)
-              console.error('Details:', err?.details)
-              console.error('Metadata:', err?.metadata)
-              try { console.error('Full Error Object:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2)) } catch (e) { console.error('Full Error Object (stringify failed):', err) }
-              throw err
-            }
-          }
-          break
-        }
-
-        default:
-          console.log('[webhook] unhandled event', event.type)
+        break
       }
-    } catch (err) {
-      // Re-throw to outer catch for uniform handling below
-      throw err
+
+      default:
+        console.log('[webhook] unhandled event', event.type)
     }
 
     // mark processed
@@ -317,12 +331,16 @@ app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res)
     return res.json({ received: true })
   } catch (err) {
     console.error('🔥 FIRESTORE / WEBHOOK PROCESSING ERROR 🔥')
-    console.error('Message:', err?.message)
-    console.error('Code:', err?.code)
-    console.error('Details:', err?.details)
-    console.error('Metadata:', err?.metadata)
-    console.error('Stack:', err && err.stack)
-    try { console.error('Full Error Object:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2)) } catch (e) { console.error('Full Error Object (stringify failed):', err) }
+    console.error('Message:', err && err.message ? err.message : err)
+    console.error('Code:', err && err.code ? err.code : undefined)
+    console.error('Details:', err && err.details ? err.details : undefined)
+    console.error('Metadata:', err && err.metadata ? err.metadata : undefined)
+    console.error('Stack:', err && err.stack ? err.stack : undefined)
+    try {
+      console.error('Full Error Object:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
+    } catch (e) {
+      console.error('Full Error Object (stringify failed):', err)
+    }
     return res.status(500).json({ error: 'Webhook processing failed' })
   }
 })
