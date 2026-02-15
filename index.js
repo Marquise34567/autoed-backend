@@ -536,6 +536,25 @@ try {
   console.warn('[ffmpeg-check] failed to mount ffmpeg-check route', e && e.message ? e.message : e)
 }
 
+// Temporary debug endpoint: accept raw binary upload and store to bucket.
+// This is only for local/testing and can be removed after pipeline validation.
+app.post('/api/debug/upload', express.raw({ type: '*/*', limit: '200mb' }), async (req, res) => {
+  try {
+    if (!bucket) return res.status(500).json({ ok: false, error: 'Storage bucket not configured' })
+    const filename = (req.headers['x-filename'] || req.headers['x-file-name'] || `upload-${Date.now()}`)
+    const contentType = req.headers['content-type'] || 'application/octet-stream'
+    const storagePath = `uploads/debug-${Date.now()}-${String(filename).replace(/[^a-z0-9.\-_ ]/gi, '')}`
+    console.log('[debug/upload] storing to', storagePath, 'contentType=', contentType)
+    const file = bucket.file(storagePath)
+    await file.save(req.body, { contentType })
+    console.log('[debug/upload] saved', storagePath)
+    return res.json({ ok: true, storagePath })
+  } catch (err) {
+    console.error('[debug/upload] error', err && (err.stack || err.message || err))
+    return res.status(500).json({ ok: false, error: 'Upload failed', details: err && err.message })
+  }
+})
+
 // Confirm mounted routes for easier production debugging
 try {
   console.log('Mounted /api/jobs')
