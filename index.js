@@ -37,9 +37,17 @@ const allowedOrigins = [
 
 const corsOptions = {
   origin: function (origin, callback) {
-    if (!origin) return callback(null, true)
-    if (allowedOrigins.includes(origin)) return callback(null, true)
-    return callback(new Error('Not allowed by CORS'))
+    try {
+      if (!origin) return callback(null, true)
+      // normalize origin by stripping trailing slash
+      const norm = String(origin).replace(/\/$/, '')
+      const allowed = allowedOrigins.some(o => o === norm || o === origin)
+      console.log('[cors] origin check', { origin, norm, allowed })
+      if (allowed) return callback(null, origin)
+      return callback(null, false)
+    } catch (e) {
+      return callback(null, false)
+    }
   },
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
