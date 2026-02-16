@@ -2,11 +2,7 @@
 // Migration script: normalize documents in `jobs` collection to standard schema
 // Usage: node scripts/migrate-jobs-to-standard-schema.js [--dry-run] [--batch-size=N]
 
-<<<<<<< HEAD
 const { admin, db: svcDb } = require('../services/firebaseAdmin')
-=======
-const admin = require('../services/firebaseAdmin')
->>>>>>> 690ef44 (fix(firebase): centralize admin init + export db/bucket; update routes)
 const os = require('os')
 
 const dryRun = process.argv.includes('--dry-run')

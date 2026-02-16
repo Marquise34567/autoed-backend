@@ -1,101 +1,86 @@
-<<<<<<< HEAD
-// firebase-admin already required above
+// Central Firebase Admin initializer for the backend
+// Supports FIREBASE_SERVICE_ACCOUNT_JSON (preferred) or split env vars
+const adminLib = require('firebase-admin')
 
-function getBucketNameFromEnv() {
-  const raw = process.env.FIREBASE_STORAGE_BUCKET || ''
-  if (!raw) return null
-  const s = String(raw).trim()
-  const stripped = s.replace(/^"|"$/g, '').replace(/^'|'$/g, '')
-  return stripped.replace(/^gs:\/\//i, '').trim() || null
+const DEFAULT_BUCKET = 'autoeditor-d4940.firebasestorage.app'
+const storageBucketEnvRaw = (process.env.FIREBASE_STORAGE_BUCKET || '').trim()
+const storageBucket = storageBucketEnvRaw || DEFAULT_BUCKET
+
+let admin = null
+let db = null
+let bucket = null
+
+function makeMissingError(missing) {
+  const e = new Error('Firebase not configured: missing ' + missing.join(', '))
+  e._missing = missing
+  return e
 }
 
-function getServiceAccountFromJson() {
-  const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON || process.env.GOOGLE_SERVICE_ACCOUNT_JSON || process.env.FIREBASE_SERVICE_ACCOUNT || process.env.GOOGLE_APPLICATION_CREDENTIALS || process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON
-  if (!raw) return null
-  let jsonStr = raw
-  // If the value does not look like JSON, treat it as a file path and try to read it
-  try {
-    const s = String(raw).trim()
-    if (!s.startsWith('{')) {
-      const fs = require('fs')
-      if (fs.existsSync(s)) {
-        jsonStr = fs.readFileSync(s, 'utf8')
+try {
+  // Try single JSON env first
+  const rawSa = process.env.FIREBASE_SERVICE_ACCOUNT_JSON || ''
+  let credential = null
+  if (rawSa && rawSa.trim()) {
+    try {
+      const sa = JSON.parse(rawSa)
+      if (sa && sa.client_email && sa.private_key) {
+        sa.private_key = String(sa.private_key).replace(/\\n/g, '\n')
+        credential = adminLib.credential.cert(sa)
+      }
+    } catch (e) {
+      console.error('[firebaseAdmin] Failed to parse FIREBASE_SERVICE_ACCOUNT_JSON', e && (e.message || e))
+    }
+  }
+
+  // Fallback to split env vars
+  if (!credential) {
+    const pid = process.env.FIREBASE_PROJECT_ID
+    const cemail = process.env.FIREBASE_CLIENT_EMAIL
+    let pkey = process.env.FIREBASE_PRIVATE_KEY
+    if (pid && cemail && pkey) {
+      try {
+        pkey = String(pkey).replace(/\\n/g, '\n')
+        credential = adminLib.credential.cert({ projectId: pid, clientEmail: cemail, privateKey: pkey })
+      } catch (e) {
+        console.error('[firebaseAdmin] Failed to initialize credential from env vars', e && (e.message || e))
       }
     }
-  } catch (e) {
-    // ignore - we'll try to parse whatever we have
   }
-  try {
-    const svc = typeof jsonStr === 'string' ? JSON.parse(jsonStr) : jsonStr
-    if (svc && svc.private_key) svc.private_key = String(svc.private_key).replace(/\\n/g, '\n')
-    return svc
-  } catch (e) {
-    throw new Error('Failed to parse FIREBASE_SERVICE_ACCOUNT_JSON or read service account file: ' + (e && e.message ? e.message : String(e)))
+
+  if (!credential) {
+    const missing = ['FIREBASE_SERVICE_ACCOUNT_JSON or FIREBASE_PROJECT_ID/FIREBASE_CLIENT_EMAIL/FIREBASE_PRIVATE_KEY']
+    console.warn('[firebaseAdmin] Firebase credentials not configured. Missing:', missing.join(', '))
+    // export a stub that throws when used
+    const stub = {
+      _missingEnv: missing,
+      admin: null,
+      db: null,
+      bucket: null,
+      getBucket: () => { throw makeMissingError(missing) }
+    }
+    module.exports = stub
+  } else {
+    admin = adminLib
+    if (!admin.apps.length) {
+      admin.initializeApp({ credential, storageBucket })
+      console.log('[startup] Firebase initialized OK:', storageBucket)
+    }
+    db = admin.firestore()
+    try { bucket = admin.storage().bucket(storageBucket) } catch (e) { bucket = null }
+
+    // Attach convenience properties to the admin object for backwards-compatibility
+    try { admin.db = db } catch (e) {}
+    try { admin.bucket = bucket } catch (e) {}
+    admin.getBucket = (name) => admin.storage().bucket(name || storageBucket)
+    admin.getBucketName = () => storageBucket
+
+    module.exports = admin
   }
+} catch (e) {
+  console.error('[firebaseAdmin] initialization error', e && (e.stack || e.message || e))
+  module.exports = { admin: null, db: null, bucket: null }
+>>>>>>> 690ef44 (fix(firebase): centralize admin init + export db/bucket; update routes)
 }
-
-function getCredentialFromSplitEnv() {
-  const projectId = process.env.FIREBASE_PROJECT_ID
-  const clientEmail = process.env.FIREBASE_CLIENT_EMAIL
-  const privateKeyRaw = process.env.FIREBASE_PRIVATE_KEY
-  if (!projectId || !clientEmail || !privateKeyRaw) return null
-  return {
-    projectId,
-    clientEmail,
-    privateKey: String(privateKeyRaw).replace(/\\n/g, '\n'),
-  }
-}
-
-const admin = require('firebase-admin')
-
-function init() {
-  if (admin.apps.length) return
-
-  const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON
-  const bucketName = (process.env.FIREBASE_STORAGE_BUCKET || '').trim()
-
-  if (!raw) throw new Error('Missing FIREBASE_SERVICE_ACCOUNT_JSON')
-  if (!bucketName) throw new Error('Missing FIREBASE_STORAGE_BUCKET')
-
-  let serviceAccount = null
-  try {
-    serviceAccount = JSON.parse(raw)
-  } catch (e) {
-    throw new Error('Failed to parse FIREBASE_SERVICE_ACCOUNT_JSON: ' + (e && e.message))
-  }
-  // Ensure private_key newlines are correct
-  if (serviceAccount && typeof serviceAccount.private_key === 'string') {
-    serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n')
-  }
-
-  admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount),
-    storageBucket: bucketName,
-  })
-
-  console.log('[firebaseAdmin] initialized. bucket:', bucketName)
-}
-
-init()
-
-const db = admin.firestore()
-const bucket = admin.storage().bucket() // uses storageBucket from initializeApp
-
-console.log('[firebaseAdmin] db ok:', !!db, 'bucket ok:', !!bucket)
-
-function getBucketName() {
-  const raw = process.env.FIREBASE_STORAGE_BUCKET || ''
-  if (!raw) return null
-  return String(raw).replace(/^gs:\/\//i, '').trim()
-}
-
-module.exports = {
-  admin,
-  db,
-  bucket,
-  getBucket: (name) => (name ? admin.storage().bucket(name) : bucket),
-  getBucketName,
-=======
 // Central Firebase Admin initializer for the backend
 // Supports FIREBASE_SERVICE_ACCOUNT_JSON (preferred) or split env vars
 const adminLib = require('firebase-admin')

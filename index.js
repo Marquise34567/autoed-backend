@@ -81,14 +81,6 @@ let admin = null
 let db = null
 let bucket = null
 try {
-<<<<<<< HEAD
-  const svc = require('./services/firebaseAdmin')
-  admin = svc.admin
-  db = svc.db
-  bucket = svc.bucket
-  if (!bucket && admin && admin.storage) {
-    try { const bn = process.env.FIREBASE_STORAGE_BUCKET || 'autoeditor-d4940.appspot.com'; bucket = admin.storage().bucket(bn) } catch (e) { bucket = null }
-=======
   // services/firebaseAdmin will attempt to initialize admin only when valid creds are present
   admin = require('./services/firebaseAdmin')
   try {
@@ -102,7 +94,6 @@ try {
     if (!bucket) console.warn('[startup] Firebase storage bucket not available (will error on upload attempts)')
   } catch (e) {
     console.warn('[startup] failed to resolve storage bucket', e && (e.stack || e.message || e))
->>>>>>> 690ef44 (fix(firebase): centralize admin init + export db/bucket; update routes)
   }
   if (!bucket) console.warn('[startup] Firebase storage bucket not available (will error on upload attempts)')
 } catch (e) {

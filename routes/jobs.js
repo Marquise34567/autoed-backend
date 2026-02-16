@@ -4,18 +4,17 @@ const router = express.Router()
 const fs = require('fs')
 const path = require('path')
 const { exec } = require('child_process')
-<<<<<<< HEAD
-const { admin, db, bucket } = require('../services/firebaseAdmin')
+const admin = require('../services/firebaseAdmin')
+const db = (admin && admin.db) || (admin && typeof admin.firestore === 'function' ? admin.firestore() : null)
 const { getSignedUrlForPath, attachSignedUrlsToJob } = require('../utils/storageSignedUrl')
 const { processJob } = require('../services/worker/processJob')
 const { enqueue, reenqueue, listQueued } = require('../services/worker/queue')
-// `db` and `admin` are provided by services/firebaseAdmin
+// db is defined above
 
 function jlog(event, meta = {}) {
   const base = { ts: new Date().toISOString(), event, workerId: process.env.RAILWAY_SERVICE_NAME || require('os').hostname() }
   try { console.log(JSON.stringify(Object.assign(base, meta))) } catch (e) { console.log(base, meta) }
 }
-=======
 const admin = require('../services/firebaseAdmin')
 const db = (admin && admin.db) || (admin && typeof admin.firestore === 'function' ? admin.firestore() : null)
 const { getSignedUrlForPath, attachSignedUrlsToJob } = require('../utils/storageSignedUrl')
