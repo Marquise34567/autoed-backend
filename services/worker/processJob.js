@@ -89,6 +89,20 @@ async function downloadFromGs(gsUriOrPath, dest) {
         })
       } catch (e) {}
     }
+    // Try default bucket as a last resort
+    try {
+      const defaultBucket = admin.storage().bucket()
+      const defFile = defaultBucket.file(filePath)
+      const [defExists] = await defFile.exists()
+      if (defExists) return await new Promise((resolve, reject) => {
+        const rs = defFile.createReadStream()
+        rs.on('error', reject)
+        const ws = fs.createWriteStream(dest)
+        ws.on('error', reject)
+        ws.on('finish', resolve)
+        rs.pipe(ws)
+      })
+    } catch (e) {}
     throw new Error('Source file not found: ' + filePath)
   }
   // stream to destination to avoid loading entire file in memory
