@@ -309,6 +309,8 @@ router.post('/:id/retry', async (req, res) => {
 router.post('/', async (req, res) => {
   try {
     console.log('[jobs] POST incoming')
+    // Log whether an Authorization header was provided (do not log token contents)
+    try { console.log('[jobs] Authorization present:', !!req.headers && !!req.headers.authorization) } catch (e) {}
     const body = req.body || {}
     const { storagePath, gsUri, downloadURL, filename, contentType } = body
     const smartZoom = body.smartZoom || null
@@ -329,6 +331,7 @@ router.post('/', async (req, res) => {
     if (downloadURL) inputSpec.downloadURL = downloadURL
 
     // Persist job to Firestore using standardized schema
+    if (!db) return res.status(500).json({ ok: false, error: 'Firestore not configured' })
     try {
       const now = admin.firestore.FieldValue.serverTimestamp()
       await db.collection('jobs').doc(jobId).set({
@@ -346,7 +349,7 @@ router.post('/', async (req, res) => {
         error: null,
       }, { merge: true })
     } catch (err) {
-      console.error('JOB_PERSIST_ERROR', err)
+      console.error('JOB_PERSIST_ERROR', err && (err.stack || err.message || err))
       return res.status(500).json({
         ok: false,
         error: 'Failed to persist job',

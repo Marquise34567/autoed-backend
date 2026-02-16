@@ -45,6 +45,6 @@ npm run test:signed-put
 Railway env vars to set before redeploy
 
 - `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY` — preferred: split service account values. For `FIREBASE_PRIVATE_KEY`, paste the key with escaped newlines (replace real newlines with `\\n`) when setting via Railway UI.
-- `FIREBASE_STORAGE_BUCKET` — the bucket name (e.g., `autoeditor-d4940.appspot.com` or `autoeditor-d4940.appspot.com/path`); the script will normalize to the bucket name.
+- `FIREBASE_STORAGE_BUCKET` — the bucket name (e.g., `autoeditor-d4940.firebasestorage.app` or `autoeditor-d4940.firebasestorage.app/path`); the script will normalize to the bucket name.
 
 After setting these, redeploy the app so the running instance has access to the credentials and storage bucket.
