@@ -48,3 +48,34 @@ Railway env vars to set before redeploy
 - `FIREBASE_STORAGE_BUCKET` — the bucket name (e.g., `autoeditor-d4940.appspot.com` or `autoeditor-d4940.appspot.com/path`); the script will normalize to the bucket name.
 
 After setting these, redeploy the app so the running instance has access to the credentials and storage bucket.
+
+Manual gsutil method (recommended if you manage buckets directly)
+
+1) Create a `cors.json` file with the following content:
+
+```json
+[
+	{
+		"origin": ["https://autoeditor.app", "https://www.autoeditor.app", "https://autoeditor.app/editor"],
+		"method": ["GET", "HEAD", "PUT", "POST", "DELETE", "OPTIONS"],
+		"responseHeader": ["Content-Type", "x-goog-resumable", "x-goog-meta-*"],
+		"maxAgeSeconds": 3600
+	}
+]
+```
+
+2) Run the gsutil command (replace `YOUR_BUCKET_NAME`):
+
+```bash
+gsutil cors set cors.json gs://YOUR_BUCKET_NAME
+```
+
+3) Verify the CORS configuration:
+
+```bash
+gsutil cors get gs://YOUR_BUCKET_NAME
+```
+
+Notes:
+- The CORS must allow `PUT` and `OPTIONS` so the browser can send preflight requests for V4 signed PUT uploads.
+- If you use a bucket path prefix, CORS is set at the bucket level (not per-path).

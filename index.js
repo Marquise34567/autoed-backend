@@ -29,17 +29,27 @@ const app = express()
 
 const cors = require('cors')
 
-// Minimal CORS: allow all origins via the `cors` default for simplicity
-// (Next.js proxy handles origin restrictions in production)
-app.use(cors())
+// CORS: restrict JSON API calls to known frontend origins (uploads go direct to GCS)
+const ALLOWED_ORIGINS = [
+  'https://autoeditor.app',
+  'https://www.autoeditor.app'
+]
+app.use(cors({
+  origin: (origin, cb) => {
+    // allow server-to-server requests (no origin)
+    if (!origin) return cb(null, true)
+    if (ALLOWED_ORIGINS.includes(origin)) return cb(null, true)
+    // allow Vercel preview domains
+    if (/https:\/\/.*\.vercel\.app$/i.test(origin)) return cb(null, true)
+    return cb(new Error('Not allowed by CORS'))
+  },
+  methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
+  allowedHeaders: ['Content-Type','Authorization','X-Requested-With']
+}))
 
 // Log CORS origin on every request for deploy verification
 app.use((req, res, next) => {
-  try {
-    console.log('CORS Origin:', req.headers.origin || '<none>')
-  } catch (e) {
-    /* ignore logging errors */
-  }
+  try { console.log('CORS Origin:', req.headers.origin || '<none>') } catch (e) {}
   next()
 })
 
@@ -50,7 +60,7 @@ app.use((req, res, next) => {
 
 // Lightweight health endpoints
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'ok' })
+  res.status(200).json({ ok: true })
 })
 
 app.get('/api/health', (req, res) => {
@@ -78,27 +88,24 @@ if (stripeKey && stripeKey.startsWith("sk_")) {
 
 // Use a safe firebase admin initializer that tolerates missing/invalid envs
 let admin = null
+let db = null
 let bucket = null
 try {
-  // utils/firebaseAdmin will attempt to initialize admin only when valid creds are present
-  admin = require('./utils/firebaseAdmin')
-  try {
-    const bn = process.env.FIREBASE_STORAGE_BUCKET || 'autoeditor-d4940.appspot.com'
-    if (admin && typeof admin.getBucket === 'function') {
-      try { bucket = admin.getBucket(bn) } catch (e) { bucket = null }
-    }
-    if (!bucket && admin && admin.storage) {
-      try { bucket = admin.storage().bucket(bn) } catch (e) { bucket = null }
-    }
-    if (!bucket) console.warn('[startup] Firebase storage bucket not available (will error on upload attempts)')
-  } catch (e) {
-    console.warn('[startup] failed to resolve storage bucket', e && (e.stack || e.message || e))
+  const svc = require('./services/firebaseAdmin')
+  admin = svc.admin
+  db = svc.db
+  bucket = svc.bucket
+  if (!bucket && admin && admin.storage) {
+    try { const bn = process.env.FIREBASE_STORAGE_BUCKET || 'autoeditor-d4940.appspot.com'; bucket = admin.storage().bucket(bn) } catch (e) { bucket = null }
   }
+  if (!bucket) console.warn('[startup] Firebase storage bucket not available (will error on upload attempts)')
 } catch (e) {
-  // If utils module cannot be loaded, fall back to firebase-admin but do NOT initialize.
-  console.warn('[startup] failed to load ./utils/firebaseAdmin, falling back to firebase-admin stub', e && (e.stack || e.message || e))
+  console.warn('[startup] failed to load ./services/firebaseAdmin, falling back to firebase-admin stub', e && (e.stack || e.message || e))
   try { admin = require('firebase-admin') } catch (er) { admin = null }
 }
+
+// If firebaseAdmin reported missing required envs, capture them so API routes can return JSON 500s
+const MISSING_ENV_VARS = admin && admin._missingEnv ? admin._missingEnv : null
 
 // Helper: cleanly log Firestore / gRPC errors with structured JSON
 function logFirestoreError(err, context = {}) {
@@ -184,11 +191,9 @@ app.get('/api/debug/firebase-info', (req, res) => {
 // Debug endpoint to surface Firestore errors clearly
 app.get('/api/debug/firestore', wrapAsync(async (req, res) => {
   try {
-    if (!db) return res.status(503).json({ ok: false, error: 'Firestore not configured' })
-    const snap = await db.collection('jobs').limit(1).get()
-    return res.json({ ok: true, size: snap.size })
+    return res.json({ ok: true, dbDefined: !!db, bucketDefined: !!bucket, bucketName: process.env.FIREBASE_STORAGE_BUCKET || null })
   } catch (err) {
-    logFirestoreError(err, { where: 'GET /api/debug/firestore', op: 'jobs.limit(1).get' })
+    logFirestoreError(err, { where: 'GET /api/debug/firestore', op: 'status' })
     return res.status(500).json({ ok: false, message: err?.message, code: err?.code })
   }
 }))
@@ -430,8 +435,13 @@ app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res)
 
 // Ensure JSON and urlencoded parsers are registered BEFORE any route mounts
 // so API routes receive parsed bodies (webhook above still uses raw).
-app.use(express.json({ limit: '10mb' }))
+app.use(express.json({ limit: '2mb' }))
 app.use(express.urlencoded({ extended: true }))
+// Guard API routes when required envs are missing (return JSON error)
+app.use('/api', (req, res, next) => {
+  if (MISSING_ENV_VARS) return res.status(500).json({ ok: false, error: 'Missing required env vars', missing: MISSING_ENV_VARS })
+  return next()
+})
 // Logging middleware: log incoming requests and final status for diagnosis
 app.use((req, res, next) => {
   const start = Date.now()
@@ -480,11 +490,14 @@ app.get('/api/userdoc', (_req, res) => res.json({ ok: true }))
 // Mount explicit routers under /api
 app.use('/api/health', require('./routes/health'))
 app.use('/api/ping', require('./routes/ping'))
+// Debug endpoints for verifying integrations (e.g., Firestore)
+try { app.use('/api/debug', require('./routes/debug/firestore')) } catch (e) { console.warn('[routes] failed to mount /api/debug', e && e.message ? e.message : e) }
 app.use("/api/jobs", require("./routes/jobs"))
 // Also mount non-/api path for backward compatibility (frontend may call /jobs)
 app.use("/jobs", require("./routes/jobs"))
 app.use('/api/job-status', require('./routes/job-status'))
 app.use('/api/userdoc', require('./routes/userdoc'))
+
 // Compatibility mounts: accept requests forwarded with or without /api and /proxy
 app.use('/userdoc', require('./routes/userdoc'))
 app.use('/proxy/userdoc', require('./routes/userdoc'))
@@ -492,6 +505,10 @@ app.use('/api/proxy/userdoc', require('./routes/userdoc'))
 app.use('/api/proxy/api/userdoc', require('./routes/userdoc'))
 app.use('/api/proxy/jobs', require('./routes/jobs'))
 app.use('/api/proxy/api/jobs', require('./routes/jobs'))
+
+// Mount signed-upload URL generators as dedicated routers
+try { app.use('/api/upload-url', require('./routes/upload-url')) } catch (e) { console.warn('[routes] failed to mount /api/upload-url', e && e.message ? e.message : e) }
+try { app.use('/api/signed-upload-url', require('./routes/signed-upload-url')) } catch (e) { console.warn('[routes] failed to mount /api/signed-upload-url', e && e.message ? e.message : e) }
 // Upload endpoint: accepts multipart/form-data and uploads to Firebase Storage
 try {
   app.use('/api/upload', require('./routes/upload'))
@@ -504,51 +521,7 @@ try {
   console.warn('[routes] failed to mount /api/upload', e && e.message ? e.message : e)
 }
 
-// Signed upload URL endpoint (direct-to-storage)
-app.post('/api/upload-url', async (req, res) => {
-  try {
-    const body = req.body || {}
-    const fileName = body.fileName || body.filename || body.file_name || null
-    const contentType = body.contentType || body.content_type || body.contenttype || null
-
-    console.log('[upload-url] request body keys:', Object.keys(body))
-
-    if (!fileName || !contentType) {
-      return res.status(400).json({ error: 'fileName and contentType are required' })
-    }
-
-    // Temporary debug: surface key values for troubleshooting
-    try {
-      console.log('[upload-url] Bucket:', bucket && (bucket.name || bucket.id || '<unknown>'))
-      console.log('[upload-url] Filename:', fileName)
-      console.log('[upload-url] ContentType:', contentType)
-    } catch (e) {
-      console.warn('[upload-url] failed to log debug values', e)
-    }
-
-    const storagePath = `uploads/${Date.now()}-${fileName}`
-
-    const file = bucket.file(storagePath)
-
-    // Generate signed URL without signing Content-Type to avoid signature mismatch
-    const [uploadUrl] = await file.getSignedUrl({
-      version: 'v4',
-      action: 'write',
-      expires: new Date(Date.now() + 15 * 60 * 1000),
-    })
-
-    console.log('[upload-url] generated:', storagePath)
-
-    return res.json({
-      uploadUrl,
-      storagePath
-    })
-
-  } catch (error) {
-    console.error('[upload-url] ERROR:', error && (error.stack || error.message || error))
-    return res.status(500).json({ error: 'Failed to generate signed URL', details: error && error.message })
-  }
-})
+// /api/upload-url is handled by the mounted router in ./routes/upload-url.js
 try { console.log('Mounted /api/upload') } catch (e) {}
 // Signed-upload endpoints removed to enforce client-side Firebase SDK uploads.
 // Debug routes removed (signed URL debug endpoints disabled)

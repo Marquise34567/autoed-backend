@@ -1,6 +1,5 @@
 const { processJob } = require('./processJob')
-const admin = require('../../utils/firebaseAdmin')
-const db = admin.db
+const { admin, db } = require('../firebaseAdmin')
 
 const queue = []
 let isProcessing = false

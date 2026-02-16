@@ -2,7 +2,7 @@
 // Migration script: normalize documents in `jobs` collection to standard schema
 // Usage: node scripts/migrate-jobs-to-standard-schema.js [--dry-run] [--batch-size=N]
 
-const admin = require('../utils/firebaseAdmin')
+const { admin, db: svcDb } = require('../services/firebaseAdmin')
 const os = require('os')
 
 const dryRun = process.argv.includes('--dry-run')
@@ -10,10 +10,9 @@ const batchSizeArg = process.argv.find(a => a.startsWith('--batch-size='))
 const BATCH_SIZE = batchSizeArg ? Number(batchSizeArg.split('=')[1]) : (parseInt(process.env.MIGRATE_BATCH_SIZE || '200', 10))
 
 function getDb() {
+  if (svcDb) return svcDb
   if (!admin) return null
-  // support both shapes from utils/firebaseAdmin exports
   if (admin && typeof admin.firestore === 'function') return admin.firestore()
-  if (admin && admin.db) return admin.db
   return null
 }
 

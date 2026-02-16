@@ -4,10 +4,17 @@ const os = require('os')
 const https = require('https')
 const http = require('http')
 const { exec } = require('child_process')
-const admin = require('../../utils/firebaseAdmin')
+const { admin, db, bucket } = require('../firebaseAdmin')
 const { getSignedUrlForPath } = require('../../utils/storageSignedUrl')
 
-const db = admin.db || null
+const DEFAULT_BUCKET_NAME = process.env.FIREBASE_STORAGE_BUCKET ? String(process.env.FIREBASE_STORAGE_BUCKET).replace(/^gs:\/\//i, '').trim() : null
+
+function getBucketObject(name) {
+  if (name) return admin.storage().bucket(name)
+  if (bucket) return bucket
+  if (DEFAULT_BUCKET_NAME) return admin.storage().bucket(DEFAULT_BUCKET_NAME)
+  return admin.storage().bucket()
+}
 
 async function streamDownload(url, dest) {
   // Follow up to 5 redirects
@@ -49,7 +56,7 @@ async function streamDownload(url, dest) {
 
 async function downloadFromGs(gsUriOrPath, dest) {
   // gsUriOrPath may be 'gs://bucket/path' or a storage-relative path
-  let bucketName = admin.getBucketName && admin.getBucketName()
+  let bucketName = DEFAULT_BUCKET_NAME
   let filePath = gsUriOrPath
   if (gsUriOrPath && gsUriOrPath.startsWith && gsUriOrPath.startsWith('gs://')) {
     const without = gsUriOrPath.replace(/^gs:\/\//i, '')
@@ -61,8 +68,8 @@ async function downloadFromGs(gsUriOrPath, dest) {
       throw new Error('Invalid gs:// URI')
     }
   }
-  const bucket = admin.getBucket(bucketName)
-  const remoteFile = bucket.file(filePath)
+  const bucketObj = getBucketObject(bucketName)
+  const remoteFile = bucketObj.file(filePath)
   const [exists] = await remoteFile.exists()
   if (!exists) throw new Error('Source file not found: ' + filePath)
   // stream to destination to avoid loading entire file in memory
@@ -77,8 +84,8 @@ async function downloadFromGs(gsUriOrPath, dest) {
 }
 
 async function uploadToBucket(localPath, destPath) {
-  const bucket = admin.getBucket()
-  await bucket.upload(localPath, { destination: destPath })
+  const bucketObj = getBucketObject()
+  await bucketObj.upload(localPath, { destination: destPath })
   // return a time-limited signed URL instead of a public storage URL
   const signed = await getSignedUrlForPath(destPath, 30)
   return signed
@@ -119,11 +126,11 @@ async function processJob(jobId, inputSpec) {
     // 1) storagePath (preferred)
     if (storagePath) {
       try {
-        const bucketName = admin.getBucketName && admin.getBucketName()
+        const bucketName = DEFAULT_BUCKET_NAME
         console.log(`[worker] ${jobId} downloading using storagePath=${storagePath} bucket=${bucketName}`)
         await db.collection('jobs').doc(jobId).set({ progress: 5, message: 'Downloading from storagePath', updatedAt: Date.now() }, { merge: true })
-        const bucket = admin.getBucket(bucketName)
-        const remoteFile = bucket.file(storagePath)
+        const bucketObj = getBucketObject(bucketName)
+        const remoteFile = bucketObj.file(storagePath)
         const [exists] = await remoteFile.exists()
         if (!exists) throw new Error(`Source file not found: ${storagePath}`)
         await new Promise((resolve, reject) => {

@@ -1,9 +1,9 @@
-const admin = require('../../utils/firebaseAdmin')
+const { admin, db } = require('../firebaseAdmin')
 const { processJob } = require('./processJob')
 const fs = require('fs')
 const path = require('path')
 
-const db = admin.db
+// `db` provided by services/firebaseAdmin
 
 const os = require('os')
 const POLL_MS = parseInt(process.env.WORKER_POLL_MS || '2000', 10)
