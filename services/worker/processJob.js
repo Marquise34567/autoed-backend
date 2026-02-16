@@ -71,7 +71,26 @@ async function downloadFromGs(gsUriOrPath, dest) {
   const bucketObj = getBucketObject(bucketName)
   const remoteFile = bucketObj.file(filePath)
   const [exists] = await remoteFile.exists()
-  if (!exists) throw new Error('Source file not found: ' + filePath)
+  if (!exists) {
+    // Try alternate common firebase bucket hostname (appspot.com) when provided bucket looks like a web host
+    if (bucketName && bucketName.endsWith && bucketName.endsWith('.firebasestorage.app')) {
+      const alt = bucketName.replace('.firebasestorage.app', '.appspot.com')
+      try {
+        const altBucket = getBucketObject(alt)
+        const altFile = altBucket.file(filePath)
+        const [altExists] = await altFile.exists()
+        if (altExists) return await new Promise((resolve, reject) => {
+          const rs = altFile.createReadStream()
+          rs.on('error', reject)
+          const ws = fs.createWriteStream(dest)
+          ws.on('error', reject)
+          ws.on('finish', resolve)
+          rs.pipe(ws)
+        })
+      } catch (e) {}
+    }
+    throw new Error('Source file not found: ' + filePath)
+  }
   // stream to destination to avoid loading entire file in memory
   await new Promise((resolve, reject) => {
     const rs = remoteFile.createReadStream()
