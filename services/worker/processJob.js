@@ -3,7 +3,7 @@ const path = require('path')
 const os = require('os')
 const https = require('https')
 const http = require('http')
-const { exec } = require('child_process')
+const { spawn } = require('child_process')
 const { admin, db, bucket } = require('../firebaseAdmin')
 const { getSignedUrlForPath } = require('../../utils/storageSignedUrl')
 
@@ -92,12 +92,13 @@ async function uploadToBucket(localPath, destPath) {
 }
 
 async function processJob(jobId, inputSpec) {
-  console.log(`JOB START ${jobId}`)
-  console.log(`[worker:${jobId}] processJob starting`, { inputSpec: !!inputSpec })
+  const log = (msg, ...args) => console.log(new Date().toISOString(), `[worker:${jobId}]`, msg, ...args)
+  log('PROCESS START', { inputSpec: !!inputSpec })
+  console.log(new Date().toISOString(), `[worker:${jobId}] processJob starting`)
   try {
     if (!db) throw new Error('Firestore db not initialized')
 
-    await db.collection('jobs').doc(jobId).set({ status: 'PROCESSING', progress: 0, message: 'Processing started', updatedAt: Date.now() }, { merge: true })
+    await db.collection('jobs').doc(jobId).set({ status: 'processing', progress: 0, message: 'Processing started', startedAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true })
 
     // Normalize inputSpec
     let downloadURL = null
@@ -207,18 +208,54 @@ async function processJob(jobId, inputSpec) {
     // Helper: update job stage
     async function setStage(stage, percent, message) {
       try {
-        await db.collection('jobs').doc(jobId).set({ stage, progress: percent, message, updatedAt: Date.now() }, { merge: true })
-      } catch (e) {}
+        await db.collection('jobs').doc(jobId).set({ stage, progress: percent, message, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true })
+      } catch (e) { log && log('failed setStage', e && (e.stack || e.message || e)) }
+    }
+
+    // Helper: run shell commands with spawn, capture output, enforce timeout
+    function runShellCommand(cmd, opts = {}) {
+      const timeoutMs = typeof opts.timeoutMs === 'number' ? opts.timeoutMs : (15 * 60 * 1000)
+      return new Promise((resolve, reject) => {
+        log && log('FFMPEG START', { cmd: cmd.slice ? cmd.slice(0,200) : String(cmd) })
+        const proc = spawn(cmd, { shell: true })
+        let stdout = ''
+        let stderr = ''
+        if (proc.stdout) proc.stdout.on('data', (d) => { stdout += String(d); if (stdout.length > 20000) stdout = stdout.slice(-20000) })
+        if (proc.stderr) proc.stderr.on('data', (d) => { stderr += String(d); if (stderr.length > 20000) stderr = stderr.slice(-20000) })
+        const to = setTimeout(() => {
+          try { proc.kill('SIGKILL') } catch (e) {}
+          const err = new Error('process timeout')
+          err.code = 'ETIMEDOUT'
+          err.stdout = stdout
+          err.stderr = stderr
+          reject(err)
+        }, timeoutMs)
+        proc.on('error', (err) => {
+          clearTimeout(to)
+          err.stdout = stdout
+          err.stderr = stderr
+          log && log('FFMPEG ERROR', { err: err.message })
+          reject(err)
+        })
+        proc.on('close', (code, signal) => {
+          clearTimeout(to)
+          log && log('FFMPEG DONE', { code, signal })
+          resolve({ code, signal, stdout, stderr })
+        })
+      })
     }
 
     // 1) Extract audio for transcription
     await setStage('Adding Hooks', 25, 'Extracting audio for transcription')
     const audioPath = path.resolve(outDir, `${jobId}-audio.wav`)
     const extractCmd = `ffmpeg -y -i "${localIn}" -vn -ac 1 -ar 16000 -hide_banner -loglevel error "${audioPath}"`
-    console.log('[worker] extract audio cmd:', extractCmd)
-    await new Promise((resolve, reject) => {
-      exec(extractCmd, { maxBuffer: 1024 * 1024 * 20 }, (err) => err ? reject(err) : resolve())
-    }).catch(e => { console.warn('[worker] audio extract failed', e && e.message || e) })
+    log && log('FFMPEG extract cmd', extractCmd.slice(0,200))
+    try {
+      const r = await runShellCommand(extractCmd, { timeoutMs: 2 * 60 * 1000 })
+      log && log('FFMPEG DONE extract', { code: r.code })
+    } catch (e) {
+      log && log('audio extract failed', e && (e.message || e), e && e.stderr ? e.stderr.slice(-2000) : '')
+    }
 
     // 2) Transcribe using OpenAI Whisper (if OPENAI_API_KEY present)
     let transcriptText = null
@@ -253,9 +290,9 @@ async function processJob(jobId, inputSpec) {
     let aiPlan = null
     const durationSec = await (async () => {
       try {
-        const v = await new Promise((resolve, reject) => {
-          exec(`ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${localIn}"`, (err, stdout) => err ? reject(err) : resolve(parseFloat(stdout.trim())))
-        })
+        const cmd = `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${localIn}"`
+        const rr = await runShellCommand(cmd, { timeoutMs: 30 * 1000 })
+        const v = parseFloat((rr.stdout || '').trim())
         return Number.isFinite(v) ? v : null
       } catch (e) { return null }
     })()
@@ -313,11 +350,9 @@ async function processJob(jobId, inputSpec) {
       const silCmd = `ffmpeg -i "${localIn}" -af silencedetect=noise=-30dB:d=0.6 -f null -`
       let silOutput = ''
       try {
-        await new Promise((resolve, reject) => {
-          const proc = exec(silCmd, { maxBuffer: 1024 * 1024 * 50 }, (err) => err ? reject(err) : resolve())
-          if (proc.stderr) proc.stderr.on('data', (d) => { silOutput += String(d) })
-        })
-      } catch (e) { console.warn('[worker] silence detect failed', e && e.message || e) }
+        const rr = await runShellCommand(silCmd, { timeoutMs: 60 * 1000 })
+        silOutput += rr.stderr || ''
+      } catch (e) { console.warn('[worker] silence detect failed', e && e.message || e); if (e && e.stderr) silOutput += e.stderr }
       const silenceStarts = []
       const silenceEnds = []
       for (const line of silOutput.split(/\r?\n/)) {
@@ -347,7 +382,11 @@ async function processJob(jobId, inputSpec) {
       // final tail
       if (!Number.isFinite(duration)) {
         // try probe for duration
-        try { const d = await new Promise((resolve, reject) => { exec(`ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${localIn}"`, (err, stdout) => err ? reject(err) : resolve(parseFloat(stdout.trim()))) },  ); if (Number.isFinite(d)) duration = d } catch (e) {}
+        try {
+          const rr = await runShellCommand(`ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${localIn}"`, { timeoutMs: 30 * 1000 })
+          const d = parseFloat((rr.stdout || '').trim())
+          if (Number.isFinite(d)) duration = d
+        } catch (e) {}
       }
       if (Number.isFinite(duration)) {
         if (duration - cursor > 0.05) keepSegments.push({ start: cursor, end: duration, reason: 'tail' })
@@ -482,9 +521,8 @@ async function processJob(jobId, inputSpec) {
     // probe input for resolution/fps
     let WIDTH = 1280, HEIGHT = 720, FPS = 30
     try {
-      const probeOut = await new Promise((resolve, reject) => {
-        exec(`ffprobe -v error -select_streams v:0 -show_entries stream=width,height,r_frame_rate -of default=noprint_wrappers=1:nokey=1 "${localIn}"`, (err, stdout) => err ? reject(err) : resolve(stdout))
-      })
+      const rr = await runShellCommand(`ffprobe -v error -select_streams v:0 -show_entries stream=width,height,r_frame_rate -of default=noprint_wrappers=1:nokey=1 "${localIn}"`, { timeoutMs: 30 * 1000 })
+      const probeOut = rr.stdout || ''
       const lines = probeOut.trim().split(/\r?\n/)
       if (lines[0]) WIDTH = parseInt(lines[0]) || WIDTH
       if (lines[1]) HEIGHT = parseInt(lines[1]) || HEIGHT
@@ -548,12 +586,17 @@ async function processJob(jobId, inputSpec) {
 
     const ffCmd = `ffmpeg -y -i "${localIn}" -filter_complex "${fullFilter}" -map "[outv]" -map "[outa]" -c:v libx264 -preset veryfast -crf 23 -c:a aac -movflags +faststart "${localOut}"`
     console.log('[worker] ffmpeg render cmd:', ffCmd)
-    await new Promise((resolve, reject) => {
-      const proc = exec(ffCmd, { maxBuffer: 1024 * 1024 * 200 }, (err, stdout, stderr) => err ? reject(err) : resolve({ stdout, stderr }))
-      if (proc.stdout) proc.stdout.on('data', (d) => console.log(`[worker:${jobId}] ffmpeg: ${String(d).trim()}`))
-      if (proc.stderr) proc.stderr.on('data', (d) => console.log(`[worker:${jobId}] ffmpeg: ${String(d).trim()}`))
-    })
-    console.log(`[worker:${jobId}] render finished, output at ${localOut}`)
+    try {
+      const rr = await runShellCommand(ffCmd, { timeoutMs: 15 * 60 * 1000 })
+      if (rr.stderr) log && log('FFMPEG STDERR', rr.stderr.slice(-2000))
+      if (rr.stdout) log && log('FFMPEG STDOUT', rr.stdout.slice(-2000))
+      log && log('FFMPEG DONE render', { code: rr.code })
+    } catch (e) {
+      log && log('FFMPEG render failed', e && (e.message || e))
+      throw e
+    }
+    log && log('FFMPEG DONE')
+    console.log(new Date().toISOString(), `[worker:${jobId}] render finished, output at ${localOut}`)
 
     // Upload result.json first (small, quick)
     const destResultPath = `results/${jobId}/result.json`
@@ -589,27 +632,26 @@ async function processJob(jobId, inputSpec) {
     }
 
     // Update job doc: include output path and optionally signed URL for download
-    const jobUpdate = { status: 'COMPLETE', progress: 100, updatedAt: Date.now(), message: 'Completed' }
+    const jobUpdate = { status: 'completed', progress: 100, updatedAt: admin.firestore.FieldValue.serverTimestamp(), message: 'Completed', completedAt: admin.firestore.FieldValue.serverTimestamp() }
     if (resultUrl) jobUpdate.resultUrl = resultUrl
-      console.log(`[worker:${jobId}] stage=finalize`)
-
+    log && log('stage=finalize')
     if (outputUrl) jobUpdate.outputUrl = outputUrl
     jobUpdate.outputPath = destVideoPath
     await db.collection('jobs').doc(jobId).set(jobUpdate, { merge: true })
-    console.log(`[worker:${jobId}] completed, resultPath=${destResultPath} outputPath=${destVideoPath}`)
+    log && log('completed', { resultUrl, outputUrl, outputPath: destVideoPath })
 
     // cleanup
     try { fs.unlinkSync(localIn) } catch (e) {}
     try { fs.unlinkSync(localResult) } catch (e) {}
 
   } catch (err) {
-    console.error(`JOB ERROR ${jobId}`, err && (err.stack || err.message || err))
+    console.error(new Date().toISOString(), `JOB ERROR ${jobId}`, err && (err.stack || err.message || err))
     try {
-      if (db) await db.collection('jobs').doc(jobId).set({ status: 'FAILED', progress: 0, errorMessage: err && (err.message || String(err)), updatedAt: Date.now(), message: 'Processing error' }, { merge: true })
+      if (db) await db.collection('jobs').doc(jobId).set({ status: 'failed', progress: 0, errorMessage: err && (err.message || String(err)), errorStack: err && (err.stack || null), updatedAt: admin.firestore.FieldValue.serverTimestamp(), failedAt: admin.firestore.FieldValue.serverTimestamp(), message: 'Processing error' }, { merge: true })
     } catch (e) {
-      console.error(`[worker:${jobId}] failed to write error to Firestore`, e)
+      console.error(new Date().toISOString(), `[worker:${jobId}] failed to write error to Firestore`, e)
     }
-    console.log(`JOB ERROR ${jobId}`)
+    console.log(new Date().toISOString(), `JOB ERROR ${jobId}`)
   }
 }
 
