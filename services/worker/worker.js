@@ -1,14 +1,16 @@
-const admin = require('../../utils/firebaseAdmin')
+const { admin, db } = require('../firebaseAdmin')
+const { exec } = require('child_process')
 const { processJob } = require('./processJob')
 const fs = require('fs')
 const path = require('path')
 
-const db = admin.db
+// `db` provided by services/firebaseAdmin
 
 const os = require('os')
 const POLL_MS = parseInt(process.env.WORKER_POLL_MS || '2000', 10)
 const CONCURRENCY = parseInt(process.env.WORKER_CONCURRENCY || '1', 10)
 const WORKER_ENABLED = String(process.env.WORKER_ENABLED || 'false').toLowerCase() === 'true'
+const PROCESSING_TIMEOUT_MS = parseInt(process.env.JOB_PROCESSING_TIMEOUT_MS || String(30 * 60 * 1000), 10)
 
 let running = false
 let heartbeatTimer = null
@@ -18,11 +20,28 @@ function log(jobId, ...args) {
   else console.log('[worker]', ...args)
 }
 
+console.log('[worker] WORKER_ENABLED:', process.env.WORKER_ENABLED)
+
 async function claimOne() {
   if (!db) return null
   const workerId = process.env.RAILWAY_SERVICE_NAME || os.hostname()
   // Log scan intent
   log(null, "scan: querying jobs where status=='queued'")
+  // Watchdog: find stuck processing jobs older than threshold and mark failed
+  try {
+    if (PROCESSING_TIMEOUT_MS > 0) {
+      const cutoff = admin.firestore.Timestamp.fromMillis(Date.now() - PROCESSING_TIMEOUT_MS)
+      const stale = await db.collection('jobs').where('status', '==', 'processing').where('lockedAt', '<', cutoff).limit(10).get()
+      if (!stale.empty) {
+        for (const doc of stale.docs) {
+          try {
+            await doc.ref.set({ status: 'failed', errorMessage: 'worker watchdog: processing timeout', failedAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true })
+            log(doc.id, 'watchdog marked as failed due to timeout')
+          } catch (e) { log(doc.id, 'watchdog failed to mark', e && (e.message || e)) }
+        }
+      }
+    }
+  } catch (e) { log(null, 'watchdog error', e && (e.message || e)) }
   try {
     // Find one queued job
     const q = await db.collection('jobs').where('status', '==', 'queued').orderBy('createdAt', 'asc').limit(1).get()
@@ -98,10 +117,18 @@ async function workerLoop() {
 
 function start() {
   if (!WORKER_ENABLED) return log(null, 'WORKER_ENABLED not true; skipping start')
+  // check ffmpeg availability
+  try {
+    exec('ffmpeg -version', { timeout: 8000 }, (err, stdout, stderr) => {
+      if (err) log(null, 'ffmpeg check failed', err && (err.message || err))
+      else log(null, 'ffmpeg available', stdout ? stdout.split('\n')[0] : '<no-output>')
+    })
+  } catch (e) { log(null, 'ffmpeg check error', e && (e.message || e)) }
   // run asynchronously and don't crash app on error
   setImmediate(() => {
     workerLoop().catch((e) => log(null, 'workerLoop top error', e && (e.stack || e.message || e)))
   })
+  console.log('[worker] started successfully')
 }
 
 function stop() {
