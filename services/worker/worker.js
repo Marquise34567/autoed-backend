@@ -1,4 +1,4 @@
-const { admin, db } = require('../services/firebaseAdmin')
+const admin = require('../firebaseAdmin')
 const { exec } = require('child_process')
 const { processJob } = require('./processJob')
 const fs = require('fs')

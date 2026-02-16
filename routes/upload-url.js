@@ -1,7 +1,16 @@
 const express = require('express')
 const router = express.Router()
 
+<<<<<<< HEAD
 const { admin, bucket } = require('../services/firebaseAdmin')
+=======
+const admin = require('../services/firebaseAdmin')
+
+function sanitizeFilename(name) {
+  if (!name) return 'file'
+  return String(name).replace(/[^a-zA-Z0-9.\-_ ]/g, '_').slice(0, 240)
+}
+>>>>>>> 690ef44 (fix(firebase): centralize admin init + export db/bucket; update routes)
 
 router.post('/', async (req, res) => {
   try {
