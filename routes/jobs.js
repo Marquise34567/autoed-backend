@@ -4,11 +4,11 @@ const router = express.Router()
 const fs = require('fs')
 const path = require('path')
 const { exec } = require('child_process')
-const admin = require('../utils/firebaseAdmin')
+const { admin, db, bucket } = require('../services/firebaseAdmin')
 const { getSignedUrlForPath, attachSignedUrlsToJob } = require('../utils/storageSignedUrl')
 const { processJob } = require('../services/worker/processJob')
 const { enqueue, reenqueue, listQueued } = require('../services/worker/queue')
-const db = admin.db
+// `db` and `admin` are provided by services/firebaseAdmin
 
 async function processVideo(jobId, inputSpec) {
   console.log('Processing started:', jobId)
@@ -320,8 +320,9 @@ router.post('/', async (req, res) => {
 
     const jobId = (crypto.randomUUID && crypto.randomUUID()) || `${Date.now()}-${Math.floor(Math.random() * 100000)}`
 
-    // Build canonical gsUri when possible
-    const computedGs = gsUri || (storagePath && (admin.getBucketName ? `gs://${admin.getBucketName()}/${storagePath}` : null)) || null
+    // Build canonical gsUri when possible (use configured storage bucket)
+    const bucketName = process.env.FIREBASE_STORAGE_BUCKET ? String(process.env.FIREBASE_STORAGE_BUCKET).replace(/^gs:\/\//i, '').trim() : null
+    const computedGs = gsUri || (storagePath && bucketName ? `gs://${bucketName}/${storagePath}` : null) || null
 
     const inputSpec = { storagePath }
     if (computedGs) inputSpec.gsUri = computedGs
@@ -344,9 +345,13 @@ router.post('/', async (req, res) => {
         workerId: null,
         error: null,
       }, { merge: true })
-    } catch (e) {
-      console.error('[jobs] failed to persist job to Firestore', e && (e.message || e))
-      return res.status(500).json({ ok: false, error: 'Failed to persist job' })
+    } catch (err) {
+      console.error('JOB_PERSIST_ERROR', err)
+      return res.status(500).json({
+        ok: false,
+        error: 'Failed to persist job',
+        detail: err && err.message ? err.message : String(err),
+      })
     }
 
     // Attach to in-memory jobs map for local visibility and enqueue
@@ -364,7 +369,7 @@ router.post('/', async (req, res) => {
     }
 
     // Return consistent API contract to frontend
-    return res.status(201).json({ id: jobId, status: 'queued' })
+    return res.status(201).json({ ok: true, jobId })
   } catch (err) {
     console.error('[jobs] POST error', err && (err.stack || err.message || err))
     return res.status(500).json({ ok: false, errorMessage: 'Internal server error' })
