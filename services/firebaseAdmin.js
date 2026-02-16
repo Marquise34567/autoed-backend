@@ -9,14 +9,27 @@ function getBucketNameFromEnv() {
 }
 
 function getServiceAccountFromJson() {
-  const json = process.env.FIREBASE_SERVICE_ACCOUNT_JSON || process.env.GOOGLE_SERVICE_ACCOUNT_JSON || process.env.FIREBASE_SERVICE_ACCOUNT || process.env.GOOGLE_APPLICATION_CREDENTIALS || process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON
-  if (!json) return null
+  const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON || process.env.GOOGLE_SERVICE_ACCOUNT_JSON || process.env.FIREBASE_SERVICE_ACCOUNT || process.env.GOOGLE_APPLICATION_CREDENTIALS || process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON
+  if (!raw) return null
+  let jsonStr = raw
+  // If the value does not look like JSON, treat it as a file path and try to read it
   try {
-    const svc = typeof json === 'string' ? JSON.parse(json) : json
+    const s = String(raw).trim()
+    if (!s.startsWith('{')) {
+      const fs = require('fs')
+      if (fs.existsSync(s)) {
+        jsonStr = fs.readFileSync(s, 'utf8')
+      }
+    }
+  } catch (e) {
+    // ignore - we'll try to parse whatever we have
+  }
+  try {
+    const svc = typeof jsonStr === 'string' ? JSON.parse(jsonStr) : jsonStr
     if (svc && svc.private_key) svc.private_key = String(svc.private_key).replace(/\\n/g, '\n')
     return svc
   } catch (e) {
-    throw new Error('Failed to parse FIREBASE_SERVICE_ACCOUNT_JSON: ' + (e && e.message ? e.message : String(e)))
+    throw new Error('Failed to parse FIREBASE_SERVICE_ACCOUNT_JSON or read service account file: ' + (e && e.message ? e.message : String(e)))
   }
 }
 
@@ -32,37 +45,44 @@ function getCredentialFromSplitEnv() {
   }
 }
 
-const bucketName = getBucketNameFromEnv() || 'autoeditor-d4940.firebasestorage.app'
+const admin = require('firebase-admin')
 
-// Determine credential: prefer service account JSON, then split envs
-let credential = null
-const svc = getServiceAccountFromJson()
-if (svc) {
-  credential = admin.credential.cert(svc)
-} else {
-  const split = getCredentialFromSplitEnv()
-  if (split) {
-    credential = admin.credential.cert(split)
+function init() {
+  if (admin.apps.length) return
+
+  const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON
+  const bucketName = (process.env.FIREBASE_STORAGE_BUCKET || '').trim()
+
+  if (!raw) throw new Error('Missing FIREBASE_SERVICE_ACCOUNT_JSON')
+  if (!bucketName) throw new Error('Missing FIREBASE_STORAGE_BUCKET')
+
+  let serviceAccount = null
+  try {
+    serviceAccount = JSON.parse(raw)
+  } catch (e) {
+    throw new Error('Failed to parse FIREBASE_SERVICE_ACCOUNT_JSON: ' + (e && e.message))
   }
-}
+  // Ensure private_key newlines are correct
+  if (serviceAccount && typeof serviceAccount.private_key === 'string') {
+    serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n')
+  }
 
-if (!credential) {
-  // Fail loudly: production should provide credentials via FIREBASE_SERVICE_ACCOUNT_JSON
-  const msg = 'Firebase credentials not configured. Set FIREBASE_SERVICE_ACCOUNT_JSON or FIREBASE_PROJECT_ID/FIREBASE_CLIENT_EMAIL/FIREBASE_PRIVATE_KEY'
-  console.error('[services/firebaseAdmin] ' + msg)
-  throw new Error(msg)
-}
-
-// Initialize app
-if (!admin.apps.length) {
   admin.initializeApp({
-    credential,
+    credential: admin.credential.cert(serviceAccount),
     storageBucket: bucketName,
   })
-  console.log('[services/firebaseAdmin] initialized with storageBucket:', bucketName)
+
+  console.log('[firebaseAdmin] initialized. bucket:', bucketName)
 }
 
-const db = admin.firestore()
-const bucket = admin.storage().bucket(bucketName)
+init()
 
-module.exports = { admin, db, bucket, getBucketName: () => bucketName }
+const db = admin.firestore()
+const bucket = admin.storage().bucket() // uses storageBucket from initializeApp
+
+module.exports = {
+  admin,
+  db,
+  bucket,
+  getBucket: () => bucket,
+}
