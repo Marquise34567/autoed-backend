@@ -10,7 +10,7 @@ console.log('[jobs] firebaseAdmin present:', !!admin, 'db:', !!db, 'bucket:', !!
 try { console.log('[jobs] firebaseAdmin keys:', Object.keys(adminModule)) } catch (e) {}
 console.log('[jobs] db:', !!db)
 
-if (!db) throw new Error('Firestore db is undefined after firebaseAdmin init')
+// Do not throw at module load; return explicit errors from routes instead.
 if (!bucket) console.warn('[jobs] bucket is undefined')
 const { getSignedUrlForPath, attachSignedUrlsToJob } = require('../utils/storageSignedUrl')
 const { processJob } = require('../services/worker/processJob')
@@ -21,7 +21,17 @@ async function processVideo(jobId, inputSpec) {
   console.log('Processing started:', jobId)
   try {
     // Mark processing started
-    await db.collection('jobs').doc(jobId).set({ status: 'PROCESSING', progress: 0, message: 'Processing started', updatedAt: Date.now() }, { merge: true })
+    if (!db) {
+      console.error('[jobs] db is undefined in processing, aborting processVideo for', jobId)
+      return
+    }
+    try {
+      await db.collection('jobs').doc(jobId).set({ status: 'PROCESSING', progress: 0, message: 'Processing started', updatedAt: Date.now() }, { merge: true })
+    } catch (err) {
+      console.error('[jobs] Firestore write failed (processing start):', err && (err.stack || err.message || err))
+      try { await db.collection('jobs').doc(jobId).set({ status: 'FAILED', progress: 0, message: 'Failed to write processing start', errorMessage: err && err.message || String(err), updatedAt: Date.now() }, { merge: true }) } catch (e) { console.error('[jobs] failed to write failure state', e) }
+      return
+    }
 
     const gcsBucket = bucket || adminModule.getBucket()
 
@@ -58,7 +68,11 @@ async function processVideo(jobId, inputSpec) {
           return reject(err)
         }
       })
-      await db.collection('jobs').doc(jobId).set({ progress: 10, message: 'Downloaded input (from URL)', updatedAt: Date.now() }, { merge: true })
+      try {
+        await db.collection('jobs').doc(jobId).set({ progress: 10, message: 'Downloaded input (from URL)', updatedAt: Date.now() }, { merge: true })
+      } catch (err) {
+        console.error('[jobs] Firestore write failed (download URL progress):', err && (err.stack || err.message || err))
+      }
     } else if (gsPath) {
       console.log(`[jobs:${jobId}] Input source: gsUri`)
       // Support gs://bucket/path or plain storage-relative path
@@ -93,7 +107,11 @@ async function processVideo(jobId, inputSpec) {
         }
         await remoteFile.download({ destination: localIn })
       }
-      await db.collection('jobs').doc(jobId).set({ progress: 10, message: 'Downloaded input', updatedAt: Date.now() }, { merge: true })
+      try {
+        await db.collection('jobs').doc(jobId).set({ progress: 10, message: 'Downloaded input', updatedAt: Date.now() }, { merge: true })
+      } catch (err) {
+        console.error('[jobs] Firestore write failed (download gs progress):', err && (err.stack || err.message || err))
+      }
     } else {
       console.error(`[jobs:${jobId}] No input source provided`)
       await db.collection('jobs').doc(jobId).set({ status: 'FAILED', progress: 0, message: 'No input source', errorMessage: 'Missing input', updatedAt: Date.now() }, { merge: true })
@@ -115,7 +133,11 @@ async function processVideo(jobId, inputSpec) {
       if (proc.stderr && proc.stderr.on) proc.stderr.on('data', (d) => console.log(`[jobs:${jobId}] ffmpeg: ${String(d).trim()}`))
     })
     console.log('FFmpeg finished')
-    await db.collection('jobs').doc(jobId).set({ progress: 70, message: 'FFmpeg finished', updatedAt: Date.now() }, { merge: true })
+    try {
+      await db.collection('jobs').doc(jobId).set({ progress: 70, message: 'FFmpeg finished', updatedAt: Date.now() }, { merge: true })
+    } catch (err) {
+      console.error('[jobs] Firestore write failed (ffmpeg finished):', err && (err.stack || err.message || err))
+    }
 
     // Upload result
     const finalPath = `outputs/${jobId}/final.mp4`
@@ -130,7 +152,11 @@ async function processVideo(jobId, inputSpec) {
       // fall back to storing path if signed URL generation fails
       resultUrl = null
     }
-    await db.collection('jobs').doc(jobId).set({ status: 'COMPLETE', progress: 100, resultUrl, finalVideoPath: finalPath, message: 'Completed', updatedAt: Date.now() }, { merge: true })
+    try {
+      await db.collection('jobs').doc(jobId).set({ status: 'COMPLETE', progress: 100, resultUrl, finalVideoPath: finalPath, message: 'Completed', updatedAt: Date.now() }, { merge: true })
+    } catch (err) {
+      console.error('[jobs] Firestore write failed (complete):', err && (err.stack || err.message || err))
+    }
     console.log(`Processing completed: ${jobId} resultPath=${finalPath}`)
 
     // cleanup

@@ -104,6 +104,18 @@ try {
   try { admin = require('firebase-admin') } catch (er) { admin = null }
 }
 
+// Startup validation: surface db/bucket immediately and fail fast if missing
+try {
+  console.log('[startup] db defined:', !!db)
+  console.log('[startup] bucket defined:', !!bucket)
+  console.log('[startup] bucket name:', process.env.FIREBASE_STORAGE_BUCKET)
+  if (!db) throw new Error('Firestore db is undefined at startup')
+} catch (e) {
+  console.error('[startup] fatal:', e && (e.stack || e.message || e))
+  // rethrow to crash process so Railway will surface the error
+  throw e
+}
+
 // If firebaseAdmin reported missing required envs, capture them so API routes can return JSON 500s
 const MISSING_ENV_VARS = admin && admin._missingEnv ? admin._missingEnv : null
 
