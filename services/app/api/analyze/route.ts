@@ -292,14 +292,14 @@ export async function POST(request: Request) {
       transcript: [],
       candidates: [],
       clips: [],
-      status: "QUEUED",
+      status: 'queued',
       stage: "Queued",
       message: "Upload complete",
       logs: [`Uploaded ${originalFileName || path.basename(inputPath)}`],
     });
 
     updateJob(jobId, {
-      status: "ANALYZING",
+      status: 'processing',
       stage: "Analyzing",
       message: "Transcribing and scoring",
     });
@@ -385,7 +385,7 @@ export async function POST(request: Request) {
     updateJob(jobId, {
       transcript,
       candidates: scored,
-      status: "ENHANCING_AUDIO",
+      status: 'processing',
       stage: "Enhancing audio",
       message: "Preparing sound enhancements",
       details: {
@@ -400,7 +400,7 @@ export async function POST(request: Request) {
     appendJobLog(jobId, `Duration ${metadata.duration.toFixed(2)}s`);
 
     updateJob(jobId, {
-      status: "RENDERING_DRAFT",
+      status: 'processing',
       stage: "Draft render",
       message: "Building preview",
     });
@@ -409,7 +409,7 @@ export async function POST(request: Request) {
     console.log("Job analysis done. Waiting for generate phase.");
     
     updateJob(jobId, {
-      status: "ENHANCING_AUDIO",
+      status: 'processing',
       stage: "Audio enhancement",
       message: "Preparing for final render",
     });
@@ -442,7 +442,7 @@ export async function POST(request: Request) {
     if (jobId) {
       try {
         updateJob(jobId, {
-          status: "FAILED",
+          status: 'failed',
           stage: "Failed",
           message: "Analyze failed",
           error: errorMessage,

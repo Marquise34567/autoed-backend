@@ -358,7 +358,8 @@ router.post('/', async (req, res) => {
       return res.status(500).json({
         ok: false,
         error: 'Failed to persist job',
-        detail: err && err.message ? err.message : String(err),
+        message: err && err.message ? err.message : String(err),
+        stack: err && err.stack ? err.stack : null,
       })
     }
 

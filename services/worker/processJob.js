@@ -4,7 +4,7 @@ const os = require('os')
 const https = require('https')
 const http = require('http')
 const { spawn } = require('child_process')
-const { admin, db, bucket } = require('../firebaseAdmin')
+const { admin, db, bucket } = require('../services/firebaseAdmin')
 const { getSignedUrlForPath } = require('../../utils/storageSignedUrl')
 
 const DEFAULT_BUCKET_NAME = process.env.FIREBASE_STORAGE_BUCKET ? String(process.env.FIREBASE_STORAGE_BUCKET).replace(/^gs:\/\//i, '').trim() : null

@@ -151,7 +151,7 @@ export async function POST(request: Request) {
       console.warn(`[generate] ${errorMsg} (user: ${userId}, used: ${subscription.rendersUsedThisPeriod}/${entitlements.rendersPerMonth})`);
 
       updateJob(jobId, {
-        status: "FAILED",
+        status: 'failed',
         stage: "Failed",
         message: errorMsg,
         error: errorMsg,
@@ -180,7 +180,7 @@ export async function POST(request: Request) {
       console.warn(`[generate] ${errorMsg} (video: ${inputDurationMinutes.toFixed(1)} min)`);
 
       updateJob(jobId, {
-        status: "FAILED",
+        status: 'failed',
         stage: "Failed",
         message: errorMsg,
         error: errorMsg,
@@ -209,7 +209,7 @@ export async function POST(request: Request) {
       console.warn(`[generate] ${errorMsg}`);
 
       updateJob(jobId, {
-        status: "FAILED",
+        status: 'failed',
         stage: "Failed",
         message: errorMsg,
         error: errorMsg,
@@ -231,7 +231,7 @@ export async function POST(request: Request) {
     if (inputMetadata.duration > maxDurationSec) {
       const errorMsg = `Video too long for ${effectivePlan.name} plan`;
       updateJob(jobId, {
-        status: "FAILED",
+        status: 'failed',
         stage: "Failed",
         message: errorMsg,
         error: errorMsg,
@@ -283,7 +283,7 @@ export async function POST(request: Request) {
     );
 
     updateJob(jobId, {
-      status: "RENDERING_FINAL",
+      status: 'processing',
       stage: "Rendering",
       message: "Final render: starting",
       priority: effectivePlan.features.queuePriority,
@@ -437,7 +437,7 @@ export async function POST(request: Request) {
 
     // Success: Update job to DONE
     const nextJob = updateJob(jobId, {
-      status: "DONE",
+      status: 'completed',
       stage: "Done",
       message: `Edited video ready (removed ${removedSeconds.toFixed(1)}s)`,
       finalUrl: outputUrl,

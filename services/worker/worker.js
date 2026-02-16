@@ -1,4 +1,4 @@
-const { admin, db } = require('../firebaseAdmin')
+const { admin, db } = require('../services/firebaseAdmin')
 const { exec } = require('child_process')
 const { processJob } = require('./processJob')
 const fs = require('fs')
@@ -47,9 +47,9 @@ async function claimOne() {
   } catch (e) { log(null, 'watchdog error', e && (e.message || e)) }
   try {
     // First try lowercase queued; if none, try legacy uppercase QUEUED
-    let q = await db.collection('jobs').where('status', '==', 'queued').orderBy('createdAt', 'asc').limit(1).get()
+    let q = await db.collection('jobs').where('status', '==', 'queued').limit(1).get()
     if (q.empty) {
-      q = await db.collection('jobs').where('status', '==', 'QUEUED').orderBy('createdAt', 'asc').limit(1).get()
+      q = await db.collection('jobs').where('status', '==', 'QUEUED').limit(1).get()
     }
     if (q.empty) {
       log(null, 'scan result: 0 queued jobs')

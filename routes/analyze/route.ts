@@ -309,7 +309,7 @@ export async function POST(request: Request) {
     // Start async background processing - do NOT await
     (async () => {
       try {
-        await updateJob(jobId, { phase: 'ANALYZING', status: 'running', step: 'analyze', progress: 0.02, message: 'Starting analysis' } as any);
+        await updateJob(jobId, { phase: 'ANALYZING', status: 'processing', step: 'analyze', progress: 0.02, message: 'Starting analysis' } as any);
         appendJobLog(jobId, 'Starting analysis pipeline');
 
         console.log(`[analyze:${requestId}] Getting video metadata for ${inputPath}`);
@@ -328,7 +328,7 @@ export async function POST(request: Request) {
         } catch (tErr: any) {
           const msg = tErr?.message || String(tErr)
           appendJobLog(jobId, `Transcription failed: ${msg}`);
-          await updateJob(jobId, { status: 'FAILED', step: 'analyze', progress: 0, errorMessage: msg } as any);
+          await updateJob(jobId, { status: 'failed', step: 'analyze', progress: 0, errorMessage: msg } as any);
           return;
         }
 
@@ -351,7 +351,7 @@ export async function POST(request: Request) {
         const analysisPath = path.join(outputDir, 'analysis.json');
         await fs.writeFile(analysisPath, JSON.stringify({ edl, metadata }, null, 2));
 
-        await updateJob(jobId, { transcript, candidates: scored, status: 'done', step: 'analyze', progress: 0.9, message: 'Analysis complete', resultUrls: { edl: `/outputs/${jobId}/edl.json`, analysis: `/outputs/${jobId}/analysis.json` } } as any);
+        await updateJob(jobId, { transcript, candidates: scored, status: 'completed', step: 'analyze', progress: 0.9, message: 'Analysis complete', resultUrls: { edl: `/outputs/${jobId}/edl.json`, analysis: `/outputs/${jobId}/analysis.json` } } as any);
         appendJobLog(jobId, 'Analysis complete');
 
         // leave job in completion state; subsequent generate step can transition
@@ -360,7 +360,7 @@ export async function POST(request: Request) {
         console.error(`[analyze:${requestId}] Background analysis error:`, bgErr);
         appendJobLog(jobId, `Background error: ${msg}`);
         try {
-          await updateJob(jobId, { status: 'FAILED', step: 'analyze', progress: 0, errorMessage: msg } as any);
+          await updateJob(jobId, { status: 'failed', step: 'analyze', progress: 0, errorMessage: msg } as any);
         } catch (uErr) {
           console.error('[analyze] Failed to update job on error:', uErr);
         }

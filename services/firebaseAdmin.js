@@ -80,9 +80,18 @@ init()
 const db = admin.firestore()
 const bucket = admin.storage().bucket() // uses storageBucket from initializeApp
 
+console.log('[firebaseAdmin] db ok:', !!db, 'bucket ok:', !!bucket)
+
+function getBucketName() {
+  const raw = process.env.FIREBASE_STORAGE_BUCKET || ''
+  if (!raw) return null
+  return String(raw).replace(/^gs:\/\//i, '').trim()
+}
+
 module.exports = {
   admin,
   db,
   bucket,
-  getBucket: () => bucket,
+  getBucket: (name) => (name ? admin.storage().bucket(name) : bucket),
+  getBucketName,
 }
