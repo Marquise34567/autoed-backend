@@ -13,67 +13,84 @@ async function forward(request: NextRequest, params: { path?: string[] }) {
     const headers: Record<string, string> = {}
     request.headers.forEach((v, k) => {
       if (k.toLowerCase() === 'host') return
-      headers[k] = v
-    })
+      export const runtime = "nodejs";
 
-    // Forward body when present (preserve raw bytes)
-    let body: ArrayBuffer | undefined = undefined
-    if (request.method !== 'GET' && request.method !== 'HEAD') {
-      const ab = await request.arrayBuffer()
-      if (ab && ab.byteLength) body = ab
-    }
+      import { NextResponse } from "next/server";
 
-    let resp: Response
-    try {
-      resp = await fetch(target, {
-        method: request.method,
-        headers,
-        body: body as any,
-        redirect: 'manual',
-      })
-    } catch (fetchErr: any) {
-      console.error('[proxy] fetch network error', { target, error: fetchErr && (fetchErr.stack || fetchErr.message || fetchErr) })
-      return new NextResponse(JSON.stringify({ ok: false, error: 'Proxy network error', details: fetchErr && fetchErr.message }), { status: 502, headers: { 'content-type': 'application/json' } })
-    }
+      const BACKEND = process.env.BACKEND_ORIGIN; // e.g. https://autoed-backend-production.up.railway.app
 
-    // Always log target and upstream status
-    console.log('[proxy] upstream', target, '->', resp.status)
-
-    // If upstream returned an error, read and log the response text and forward it verbatim
-    if (resp.status >= 400) {
-      let text: string | null = null
-      try {
-        text = await resp.text()
-      } catch (e) {
-        console.error('[proxy] failed reading upstream error body', { target, status: resp.status, err: e && (e.stack || e.message || e) })
+      function stripBadHeaders(inHeaders: Headers) {
+        const h = new Headers(inHeaders);
+        h.delete("origin");
+        h.delete("referer");
+        h.delete("host");
+        h.delete("connection");
+        h.delete("content-length");
+        return h;
       }
 
-      console.error('[proxy] upstream error body', { target, status: resp.status, body: text })
+      async function handler(req: Request, ctx: { params: Promise<{ path: string[] }> }) {
+        try {
+          if (!BACKEND) {
+            return NextResponse.json(
+              { ok: false, error: "Missing BACKEND_ORIGIN env var on server" },
+              { status: 500 }
+            );
+          }
 
-      // Preserve upstream content-type if present, otherwise default to application/json
-      const ct = resp.headers.get('content-type') || 'application/json'
-      const headersOut: Record<string, string> = { 'content-type': ct }
-      resp.headers.forEach((v, k) => { headersOut[k] = v })
+          const { path } = await ctx.params;
+          const url = new URL(req.url);
+          const target = new URL(`${BACKEND}/api/${path.join("/")}`);
+          target.search = url.search;
 
-      // Return exact upstream body (as text) with original status and headers
-      return new NextResponse(text, { status: resp.status, headers: headersOut })
-    }
+          const method = req.method.toUpperCase();
+          const headers = stripBadHeaders(req.headers);
 
-    // Non-error: stream response through, copying headers
-    const responseHeaders: Record<string, string> = {}
-    resp.headers.forEach((v, k) => { responseHeaders[k] = v })
+          const body =
+            method === "GET" || method === "HEAD" ? undefined : await req.arrayBuffer();
 
-    return new NextResponse(resp.body, { status: resp.status, headers: responseHeaders })
-  } catch (err: any) {
-    console.error('[proxy] forward error', err && (err.stack || err.message || err))
-    return new NextResponse(JSON.stringify({ ok: false, error: 'Proxy forward error', details: err && err.message }), { status: 500, headers: { 'content-type': 'application/json' } })
-  }
-}
+          const upstream = await fetch(target.toString(), {
+            method,
+            headers,
+            body,
+            redirect: "manual",
+          });
 
-export async function GET(req: NextRequest, { params }: { params: { path?: string[] } }) { return forward(req, params) }
-export async function POST(req: NextRequest, { params }: { params: { path?: string[] } }) { return forward(req, params) }
-export async function PUT(req: NextRequest, { params }: { params: { path?: string[] } }) { return forward(req, params) }
-export async function DELETE(req: NextRequest, { params }: { params: { path?: string[] } }) { return forward(req, params) }
-export async function PATCH(req: NextRequest, { params }: { params: { path?: string[] } }) { return forward(req, params) }
-export async function OPTIONS(req: NextRequest, { params }: { params: { path?: string[] } }) { return forward(req, params) }
-export async function HEAD(req: NextRequest, { params }: { params?: { path?: string[] } }) { return forward(req, params) }
+          const contentType = upstream.headers.get("content-type") || "application/json";
+          const resBody = await upstream.arrayBuffer();
+
+          if (!upstream.ok) {
+            // log exact upstream error to Vercel logs
+            let debugText = "";
+            try {
+              debugText = new TextDecoder().decode(resBody);
+            } catch {}
+            console.error("[proxy] upstream error", {
+              target: target.toString(),
+              status: upstream.status,
+              body: debugText.slice(0, 2000),
+            });
+          }
+
+          return new NextResponse(resBody, {
+            status: upstream.status,
+            headers: { "content-type": contentType },
+          });
+        } catch (err: any) {
+          console.error("[proxy] fatal", err);
+          return NextResponse.json(
+            { ok: false, error: "Proxy crashed", detail: String(err?.message || err) },
+            { status: 502 }
+          );
+        }
+      }
+
+      export async function OPTIONS() {
+        return new NextResponse(null, { status: 200 });
+      }
+
+      export async function GET(req: Request, ctx: any) { return handler(req, ctx); }
+      export async function POST(req: Request, ctx: any) { return handler(req, ctx); }
+      export async function PUT(req: Request, ctx: any) { return handler(req, ctx); }
+      export async function PATCH(req: Request, ctx: any) { return handler(req, ctx); }
+      export async function DELETE(req: Request, ctx: any) { return handler(req, ctx); }
