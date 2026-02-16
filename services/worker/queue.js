@@ -1,10 +1,6 @@
 const { processJob } = require('./processJob')
-<<<<<<< HEAD
-const { admin, db } = require('../services/firebaseAdmin')
-=======
-const admin = require('../../services/firebaseAdmin')
-const db = admin.db
->>>>>>> 690ef44 (fix(firebase): centralize admin init + export db/bucket; update routes)
+const admin = require('../firebaseAdmin')
+const db = admin && admin.db
 
 const queue = []
 let isProcessing = false
