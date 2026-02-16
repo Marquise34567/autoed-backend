@@ -294,7 +294,7 @@ export async function POST(request: Request) {
     await createJob({
       id: jobId,
       uid: undefined,
-      phase: 'QUEUED',
+      phase: 'queued',
       status: 'queued',
       step: 'upload',
       progress: 0,

@@ -1,7 +1,7 @@
 const express = require('express')
 const router = express.Router()
 
-const admin = require('../utils/firebaseAdmin')
+const { admin, bucket } = require('../services/firebaseAdmin')
 
 router.post('/', async (req, res) => {
   try {
@@ -12,17 +12,11 @@ router.post('/', async (req, res) => {
     if (!fileName) return res.status(400).json({ ok: false, error: 'Missing fileName' })
     if (!contentType) return res.status(400).json({ ok: false, error: 'Missing contentType' })
 
-    // Resolve bucket
-    let bucket = null
+    // Resolve bucket from services/firebaseAdmin
+    let useBucket = bucket
     try {
-      if (admin && typeof admin.getBucket === 'function') {
-        bucket = admin.getBucket()
-      } else if (admin && admin.storage) {
-        bucket = admin.storage().bucket()
-      }
-    } catch (e) {
-      bucket = null
-    }
+      if (!useBucket && admin && admin.storage) useBucket = admin.storage().bucket()
+    } catch (e) { useBucket = null }
 
     try {
       console.log('[upload-url] resolved bucket:', bucket && (bucket.name || bucket.id || '<unknown>'))
@@ -32,10 +26,10 @@ router.post('/', async (req, res) => {
       console.warn('[upload-url] debug log failed', e)
     }
 
-    if (!bucket) return res.status(500).json({ ok: false, error: 'Storage bucket not configured' })
+    if (!useBucket) return res.status(500).json({ ok: false, error: 'Storage bucket not configured' })
 
     const storagePath = `uploads/${Date.now()}-${fileName}`
-    const file = bucket.file(storagePath)
+    const file = useBucket.file(storagePath)
 
     try {
       // Do not sign Content-Type header (clients may set it freely)

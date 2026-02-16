@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 const base = process.env.BACKEND_BASE || process.env.BACKEND_URL || 'http://localhost:3000'
-const inputSpec = process.env.SMOKE_INPUT || process.env.INPUT || 'gs://autoeditor-d4940.firebasestorage.app/test-inputs/prod-test.mp4'
+const inputSpec = process.env.SMOKE_INPUT || process.env.INPUT || 'test-inputs/prod-test.mp4'
 const pollMs = parseInt(process.env.SMOKE_POLL_MS || '3000', 10)
 const maxPoll = parseInt(process.env.SMOKE_MAX_POLL || '600', 10) // max attempts
 
@@ -11,8 +11,10 @@ async function main(){
   console.log('SMOKE: inputSpec=', inputSpec)
   // create job
   const postUrl = `${base.replace(/\/$/,'')}/api/jobs`
-  const body = { storagePath: inputSpec.startsWith('gs://') ? inputSpec.replace(/^gs:\/\//,'') : undefined }
-  if (!body.storagePath) body.gsUri = inputSpec
+  const body = {}
+  if (inputSpec.startsWith('gs://')) body.gsUri = inputSpec
+  else if (inputSpec.startsWith('http')) body.downloadURL = inputSpec
+  else body.storagePath = inputSpec
   console.log('SMOKE: POST', postUrl, body)
   const res = await fetch(postUrl, { method: 'POST', headers: { 'Content-Type':'application/json' }, body: JSON.stringify(body)})
   if (!res.ok) {

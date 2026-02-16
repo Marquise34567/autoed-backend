@@ -78,25 +78,19 @@ if (stripeKey && stripeKey.startsWith("sk_")) {
 
 // Use a safe firebase admin initializer that tolerates missing/invalid envs
 let admin = null
+let db = null
 let bucket = null
 try {
-  // utils/firebaseAdmin will attempt to initialize admin only when valid creds are present
-  admin = require('./utils/firebaseAdmin')
-  try {
-    const bn = process.env.FIREBASE_STORAGE_BUCKET || 'autoeditor-d4940.appspot.com'
-    if (admin && typeof admin.getBucket === 'function') {
-      try { bucket = admin.getBucket(bn) } catch (e) { bucket = null }
-    }
-    if (!bucket && admin && admin.storage) {
-      try { bucket = admin.storage().bucket(bn) } catch (e) { bucket = null }
-    }
-    if (!bucket) console.warn('[startup] Firebase storage bucket not available (will error on upload attempts)')
-  } catch (e) {
-    console.warn('[startup] failed to resolve storage bucket', e && (e.stack || e.message || e))
+  const svc = require('./services/firebaseAdmin')
+  admin = svc.admin
+  db = svc.db
+  bucket = svc.bucket
+  if (!bucket && admin && admin.storage) {
+    try { const bn = process.env.FIREBASE_STORAGE_BUCKET || 'autoeditor-d4940.appspot.com'; bucket = admin.storage().bucket(bn) } catch (e) { bucket = null }
   }
+  if (!bucket) console.warn('[startup] Firebase storage bucket not available (will error on upload attempts)')
 } catch (e) {
-  // If utils module cannot be loaded, fall back to firebase-admin but do NOT initialize.
-  console.warn('[startup] failed to load ./utils/firebaseAdmin, falling back to firebase-admin stub', e && (e.stack || e.message || e))
+  console.warn('[startup] failed to load ./services/firebaseAdmin, falling back to firebase-admin stub', e && (e.stack || e.message || e))
   try { admin = require('firebase-admin') } catch (er) { admin = null }
 }
 
@@ -480,6 +474,8 @@ app.get('/api/userdoc', (_req, res) => res.json({ ok: true }))
 // Mount explicit routers under /api
 app.use('/api/health', require('./routes/health'))
 app.use('/api/ping', require('./routes/ping'))
+// Debug endpoints for verifying integrations (e.g., Firestore)
+try { app.use('/api/debug', require('./routes/debug/firestore')) } catch (e) { console.warn('[routes] failed to mount /api/debug', e && e.message ? e.message : e) }
 app.use("/api/jobs", require("./routes/jobs"))
 // Also mount non-/api path for backward compatibility (frontend may call /jobs)
 app.use("/jobs", require("./routes/jobs"))

@@ -1,10 +1,18 @@
-const admin = require('./firebaseAdmin')
+const { admin, bucket } = require('../services/firebaseAdmin')
+const DEFAULT_BUCKET_NAME = process.env.FIREBASE_STORAGE_BUCKET ? String(process.env.FIREBASE_STORAGE_BUCKET).replace(/^gs:\/\//i, '').trim() : null
+
+function getBucketObj(name) {
+  if (name) return admin.storage().bucket(name)
+  if (bucket) return bucket
+  if (DEFAULT_BUCKET_NAME) return admin.storage().bucket(DEFAULT_BUCKET_NAME)
+  return admin.storage().bucket()
+}
 
 async function getSignedUrlForPath(objectPath, expiresMinutes = 30, bucketName = null) {
   if (!objectPath) throw new Error('Missing objectPath')
   // allow explicit bucketName override
-  const bucket = bucketName ? admin.getBucket(bucketName) : admin.getBucket()
-  const file = bucket.file(objectPath)
+  const useBucket = bucketName ? admin.storage().bucket(bucketName) : getBucketObj()
+  const file = useBucket.file(objectPath)
   const [exists] = await file.exists()
   if (!exists) throw new Error('Storage object not found: ' + (bucketName ? `${bucketName}/${objectPath}` : objectPath))
   const expiresMs = Date.now() + (expiresMinutes || 30) * 60 * 1000
@@ -28,7 +36,7 @@ function _extractPathFromStorageUrl(url) {
 async function attachSignedUrlsToJob(job, expiresMinutes = 30) {
   if (!job) return job
   const cloned = Object.assign({}, job)
-  const bucket = admin.getBucket()
+  const bucket = getBucketObj()
 
   try {
     // resultUrl (common case for small JSON result)
@@ -43,14 +51,14 @@ async function attachSignedUrlsToJob(job, expiresMinutes = 30) {
       const parsed = _extractPathFromStorageUrl(cloned.resultUrl)
       if (parsed && parsed.path) {
         try {
-          const useBucket = parsed.bucket ? admin.getBucket(parsed.bucket) : bucket
+          const useBucket = parsed.bucket ? admin.storage().bucket(parsed.bucket) : bucket
           const f = useBucket.file(parsed.path)
           const [exists] = await f.exists()
           if (exists) {
             try {
               cloned.resultUrl = await getSignedUrlForPath(parsed.path, expiresMinutes, parsed.bucket)
             } catch (err) {
-              console.warn('[storageSignedUrl] failed to generate signed URL for resultUrl path', parsed.bucket || admin.getBucketName && admin.getBucketName(), parsed.path, err && err.message ? err.message : err)
+                  console.warn('[storageSignedUrl] failed to generate signed URL for resultUrl path', parsed.bucket || DEFAULT_BUCKET_NAME, parsed.path, err && err.message ? err.message : err)
             }
           }
         } catch (e) {}
@@ -101,14 +109,14 @@ async function attachSignedUrlsToJob(job, expiresMinutes = 30) {
 
           if (objPath) {
             try {
-              const useBucket = objBucket ? admin.getBucket(objBucket) : bucket
+              const useBucket = objBucket ? admin.storage().bucket(objBucket) : bucket
               const f = useBucket.file(objPath)
               const [exists] = await f.exists()
               if (exists) {
                 try {
                   out[k] = await getSignedUrlForPath(objPath, expiresMinutes, objBucket)
                 } catch (err) {
-                  console.warn('[storageSignedUrl] failed to generate signed URL for resultUrls key', k, objBucket || admin.getBucketName && admin.getBucketName(), objPath, err && err.message ? err.message : err)
+                  console.warn('[storageSignedUrl] failed to generate signed URL for resultUrls key', k, objBucket || DEFAULT_BUCKET_NAME, objPath, err && err.message ? err.message : err)
                   out[k] = v
                 }
               }

@@ -3,17 +3,20 @@ const { exec } = require('child_process')
 const { processJob } = require('./processJob')
 const fs = require('fs')
 const path = require('path')
+const { listQueued } = require('./queue')
 
 // `db` provided by services/firebaseAdmin
 
 const os = require('os')
 const POLL_MS = parseInt(process.env.WORKER_POLL_MS || '2000', 10)
-const CONCURRENCY = parseInt(process.env.WORKER_CONCURRENCY || '1', 10)
+const CONCURRENCY = parseInt(process.env.WORKER_CONCURRENCY || '2', 10)
 const WORKER_ENABLED = String(process.env.WORKER_ENABLED || 'false').toLowerCase() === 'true'
 const PROCESSING_TIMEOUT_MS = parseInt(process.env.JOB_PROCESSING_TIMEOUT_MS || String(30 * 60 * 1000), 10)
 
 let running = false
 let heartbeatTimer = null
+const activeJobs = new Map() // jobId -> Promise
+const startTime = Date.now()
 
 function log(jobId, ...args) {
   if (jobId) console.log('[worker]', jobId, ...args)
@@ -26,7 +29,7 @@ async function claimOne() {
   if (!db) return null
   const workerId = process.env.RAILWAY_SERVICE_NAME || os.hostname()
   // Log scan intent
-  log(null, "scan: querying jobs where status=='queued'")
+  log(null, "scan: querying jobs where status=='queued' (with uppercase fallback)")
   // Watchdog: find stuck processing jobs older than threshold and mark failed
   try {
     if (PROCESSING_TIMEOUT_MS > 0) {
@@ -43,8 +46,11 @@ async function claimOne() {
     }
   } catch (e) { log(null, 'watchdog error', e && (e.message || e)) }
   try {
-    // Find one queued job
-    const q = await db.collection('jobs').where('status', '==', 'queued').orderBy('createdAt', 'asc').limit(1).get()
+    // First try lowercase queued; if none, try legacy uppercase QUEUED
+    let q = await db.collection('jobs').where('status', '==', 'queued').orderBy('createdAt', 'asc').limit(1).get()
+    if (q.empty) {
+      q = await db.collection('jobs').where('status', '==', 'QUEUED').orderBy('createdAt', 'asc').limit(1).get()
+    }
     if (q.empty) {
       log(null, 'scan result: 0 queued jobs')
       return null
@@ -56,12 +62,21 @@ async function claimOne() {
         const snap = await tx.get(ref)
         const data = snap.exists ? snap.data() : null
         if (!data) return null
-        // Accept only jobs that are explicitly queued
+        // Accept only jobs that are explicitly queued (support old uppercase)
         if (!data.status || String(data.status).toLowerCase() !== 'queued') return null
+        log(ref.id, 'found job with status', data.status)
+        // Enforce lock age: allow claim only if lockedAt is null or older than 5 minutes
+        const nowMs = Date.now()
+        const LOCK_AGE_MS = 5 * 60 * 1000
+        if (data.lockedAt) {
+          let lockedMillis = 0
+          try { lockedMillis = data.lockedAt.toMillis ? data.lockedAt.toMillis() : (new Date(data.lockedAt)).getTime() } catch (e) { lockedMillis = 0 }
+          if (lockedMillis && (nowMs - lockedMillis) < LOCK_AGE_MS) return null
+        }
         tx.update(ref, { status: 'processing', progress: 0, lockedAt: admin.firestore.FieldValue.serverTimestamp(), workerId, updatedAt: admin.firestore.FieldValue.serverTimestamp() })
         return { id: ref.id, data }
       })
-      if (claimed) log(claimed.id, 'claimed job', claimed.id, 'by', workerId)
+      if (claimed) log(claimed.id, 'claimed job', claimed.id, 'by', workerId, 'oldStatus=', claimed.data && claimed.data.status)
       return claimed
     } catch (e) {
       log(null, 'claim transaction failed', e && (e.stack || e.message || e))
@@ -84,6 +99,11 @@ async function workerLoop() {
 
   while (running) {
     try {
+      // Enforce concurrency limit
+      if (activeJobs.size >= CONCURRENCY) {
+        await new Promise(r => setTimeout(r, POLL_MS))
+        continue
+      }
       const claimed = await claimOne()
       if (!claimed) {
         // sleep
@@ -95,16 +115,22 @@ async function workerLoop() {
       const snap = await db.collection('jobs').doc(jobId).get()
       const jobDoc = snap.exists ? snap.data() : null
       let inputSpec = (jobDoc && jobDoc.inputSpec) || jobDoc || null
-      try {
-        // call processJob which updates Firestore itself
+
+      // Start processing without blocking the loop (up to concurrency limit)
+      const p = (async () => {
         log(jobId, 'input resolved, starting processJob')
-        await processJob(jobId, inputSpec)
-        log(jobId, 'processing finished')
-        try { await db.collection('jobs').doc(jobId).set({ status: 'completed', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }) } catch (er) { log(jobId, 'failed to mark completed', er) }
-      } catch (e) {
-        log(jobId, 'processing error', e && (e.stack || e.message || e))
-        try { await db.collection('jobs').doc(jobId).set({ status: 'failed', progress: 0, error: e && (e.message || String(e)), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }) } catch (er) { log(jobId, 'failed to write error state', er) }
-      }
+        try {
+          await processJob(jobId, inputSpec)
+          log(jobId, 'processing finished')
+          try { await db.collection('jobs').doc(jobId).set({ status: 'completed', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }) } catch (er) { log(jobId, 'failed to mark completed', er) }
+        } catch (e) {
+          log(jobId, 'processing error', e && (e.stack || e.message || e))
+          try { await db.collection('jobs').doc(jobId).set({ status: 'failed', progress: 0, error: e && (e.message || String(e)), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }) } catch (er) { log(jobId, 'failed to write error state', er) }
+        } finally {
+          activeJobs.delete(jobId)
+        }
+      })()
+      activeJobs.set(jobId, p)
     } catch (err) {
       log(null, 'worker loop error', err && (err.stack || err.message || err))
       await new Promise(r => setTimeout(r, POLL_MS))
@@ -128,7 +154,7 @@ function start() {
   setImmediate(() => {
     workerLoop().catch((e) => log(null, 'workerLoop top error', e && (e.stack || e.message || e)))
   })
-  console.log('[worker] started successfully')
+  log(null, 'started successfully')
 }
 
 function stop() {
@@ -136,3 +162,15 @@ function stop() {
 }
 
 module.exports = { start, stop }
+
+function getStatus() {
+  const workerId = process.env.RAILWAY_SERVICE_NAME || os.hostname()
+  return {
+    workerId,
+    uptimeMs: Date.now() - startTime,
+    activeJobs: Array.from(activeJobs.keys()),
+    queuedCount: typeof listQueued === 'function' ? listQueued().length : 0
+  }
+}
+
+module.exports.getStatus = getStatus

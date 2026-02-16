@@ -10,11 +10,16 @@ const { processJob } = require('../services/worker/processJob')
 const { enqueue, reenqueue, listQueued } = require('../services/worker/queue')
 // `db` and `admin` are provided by services/firebaseAdmin
 
+function jlog(event, meta = {}) {
+  const base = { ts: new Date().toISOString(), event, workerId: process.env.RAILWAY_SERVICE_NAME || require('os').hostname() }
+  try { console.log(JSON.stringify(Object.assign(base, meta))) } catch (e) { console.log(base, meta) }
+}
+
 async function processVideo(jobId, inputSpec) {
   console.log('Processing started:', jobId)
   try {
     // Mark processing started
-    await db.collection('jobs').doc(jobId).set({ status: 'PROCESSING', progress: 0, message: 'Processing started', updatedAt: Date.now() }, { merge: true })
+    await db.collection('jobs').doc(jobId).set({ status: 'processing', progress: 0, message: 'Processing started', updatedAt: Date.now() }, { merge: true })
 
     const bucket = admin.getBucket()
 
@@ -67,13 +72,13 @@ async function processVideo(jobId, inputSpec) {
           const [exists] = await remoteFile.exists()
             if (!exists) {
             console.error(`[jobs:${jobId}] Source file not found: ${gsPath}`)
-            await db.collection('jobs').doc(jobId).set({ status: 'FAILED', progress: 0, message: 'Source file not found', errorMessage: 'Source file missing', updatedAt: Date.now() }, { merge: true })
+            await db.collection('jobs').doc(jobId).set({ status: 'failed', progress: 0, message: 'Source file not found', errorMessage: 'Source file missing', updatedAt: Date.now() }, { merge: true })
             return
           }
           await remoteFile.download({ destination: localIn })
         } else {
           console.error(`[jobs:${jobId}] Invalid gs:// URI: ${gsPath}`)
-          await db.collection('jobs').doc(jobId).set({ status: 'FAILED', progress: 0, message: 'Invalid gsUri', errorMessage: 'Invalid gsUri', updatedAt: Date.now() }, { merge: true })
+          await db.collection('jobs').doc(jobId).set({ status: 'failed', progress: 0, message: 'Invalid gsUri', errorMessage: 'Invalid gsUri', updatedAt: Date.now() }, { merge: true })
           return
         }
       } else {
@@ -81,7 +86,7 @@ async function processVideo(jobId, inputSpec) {
         const [exists] = await remoteFile.exists()
         if (!exists) {
           console.error(`[jobs:${jobId}] Source file not found: ${filePath}`)
-          await db.collection('jobs').doc(jobId).set({ status: 'FAILED', progress: 0, message: 'Source file not found', errorMessage: 'Source file missing', updatedAt: Date.now() }, { merge: true })
+          await db.collection('jobs').doc(jobId).set({ status: 'failed', progress: 0, message: 'Source file not found', errorMessage: 'Source file missing', updatedAt: Date.now() }, { merge: true })
           return
         }
         await remoteFile.download({ destination: localIn })
@@ -89,7 +94,7 @@ async function processVideo(jobId, inputSpec) {
       await db.collection('jobs').doc(jobId).set({ progress: 10, message: 'Downloaded input', updatedAt: Date.now() }, { merge: true })
     } else {
       console.error(`[jobs:${jobId}] No input source provided`)
-      await db.collection('jobs').doc(jobId).set({ status: 'FAILED', progress: 0, message: 'No input source', errorMessage: 'Missing input', updatedAt: Date.now() }, { merge: true })
+      await db.collection('jobs').doc(jobId).set({ status: 'failed', progress: 0, message: 'No input source', errorMessage: 'Missing input', updatedAt: Date.now() }, { merge: true })
       return
     }
 
@@ -123,7 +128,7 @@ async function processVideo(jobId, inputSpec) {
       // fall back to storing path if signed URL generation fails
       resultUrl = null
     }
-    await db.collection('jobs').doc(jobId).set({ status: 'COMPLETE', progress: 100, resultUrl, finalVideoPath: finalPath, message: 'Completed', updatedAt: Date.now() }, { merge: true })
+    await db.collection('jobs').doc(jobId).set({ status: 'completed', progress: 100, resultUrl, finalVideoPath: finalPath, message: 'Completed', updatedAt: Date.now() }, { merge: true })
     console.log(`Processing completed: ${jobId} resultPath=${finalPath}`)
 
     // cleanup
@@ -131,7 +136,7 @@ async function processVideo(jobId, inputSpec) {
     try { fs.unlinkSync(localOut) } catch (e) {}
     } catch (err) {
     console.error(`[jobs:${jobId}] processing error:`, err && (err.stack || err.message || err))
-    try { await db.collection('jobs').doc(jobId).set({ status: 'FAILED', progress: 0, errorMessage: err && (err.message || String(err)), updatedAt: Date.now() }, { merge: true }) } catch (e) { console.error('[jobs] failed to write error state to Firestore', e) }
+    try { await db.collection('jobs').doc(jobId).set({ status: 'failed', progress: 0, errorMessage: err && (err.message || String(err)), updatedAt: Date.now() }, { merge: true }) } catch (e) { console.error('[jobs] failed to write error state to Firestore', e) }
   }
 }
 
@@ -139,12 +144,12 @@ function normalizeJobRecord(raw) {
   if (!raw) return null
   const job = { ...raw }
   // normalize status strings
-  const s = (job.status || job.state || '').toString().toUpperCase()
-  if (s === 'DONE' || s === 'COMPLETED' || s === 'COMPLETE') job.status = 'COMPLETE'
-  else if (s === 'PROCESSING') job.status = 'PROCESSING'
-  else if (s === 'QUEUED') job.status = 'QUEUED'
-  else if (s === 'ERROR' || s === 'FAILED') job.status = 'FAILED'
-  else job.status = s || 'QUEUED'
+  const s = (job.status || job.state || '').toString().toLowerCase()
+  if (s === 'done' || s === 'completed' || s === 'complete') job.status = 'completed'
+  else if (s === 'processing') job.status = 'processing'
+  else if (s === 'queued') job.status = 'queued'
+  else if (s === 'error' || s === 'failed') job.status = 'failed'
+  else job.status = s || 'queued'
 
   job.progress = Number.isFinite(Number(job.progress)) ? Number(job.progress) : 0
   job.errorMessage = job.errorMessage || job.error || job.failure || null
@@ -160,7 +165,7 @@ function makeJob({ id, path = null, filename = null, contentType = null }) {
   const createdAt = new Date().toISOString()
   return {
     id,
-    status: 'QUEUED',
+    status: 'queued',
     progress: 0,
     createdAt,
     path,
@@ -295,7 +300,7 @@ router.post('/:id/retry', async (req, res) => {
     const snap = await db.collection('jobs').doc(id).get()
     if (!snap.exists) return res.status(404).json({ ok: false, error: 'Job not found' })
     const data = snap.data()
-    await db.collection('jobs').doc(id).set({ status: 'QUEUED', progress: 0, message: 'Re-queued', updatedAt: Date.now() }, { merge: true })
+    await db.collection('jobs').doc(id).set({ status: 'queued', progress: 0, message: 'Re-queued', updatedAt: Date.now() }, { merge: true })
     reenqueue(id, data.inputSpec || {})
     console.log('Re-enqueued', id)
     return res.status(200).json({ ok: true, jobId: id })
@@ -308,7 +313,7 @@ router.post('/:id/retry', async (req, res) => {
 // Create a job
 router.post('/', async (req, res) => {
   try {
-    console.log('[jobs] POST incoming')
+    jlog('job_post_incoming')
     // Log whether an Authorization header was provided (do not log token contents)
     try { console.log('[jobs] Authorization present:', !!req.headers && !!req.headers.authorization) } catch (e) {}
     const body = req.body || {}
@@ -362,7 +367,7 @@ router.post('/', async (req, res) => {
     job.inputSpec = inputSpec
     jobs.set(jobId, job)
 
-    console.log('[jobs] created', jobId, 'status=queued', { storagePath, downloadURL, filename, contentType, smartZoom })
+    jlog('job_created', { jobId, status: 'queued', storagePath, downloadURL, filename, contentType, smartZoom })
 
     try {
       enqueue(jobId, inputSpec)
@@ -388,10 +393,10 @@ router.post('/:id/start', async (req, res) => {
     const snap = await db.collection('jobs').doc(id).get()
     if (!snap.exists) return res.status(404).json({ ok: false, errorMessage: 'Job not found' })
     const data = snap.data() || {}
-    await db.collection('jobs').doc(id).set({ status: 'PROCESSING', progress: 0, message: 'Manually started', updatedAt: Date.now() }, { merge: true })
+    await db.collection('jobs').doc(id).set({ status: 'processing', progress: 0, message: 'Manually started', updatedAt: Date.now() }, { merge: true })
     try { enqueue(id, data.inputSpec || {}) } catch (e) { console.error('[jobs] failed to enqueue on start', e) }
     console.log('[jobs] start invoked for', id)
-    return res.status(200).json({ id, status: 'PROCESSING' })
+    return res.status(200).json({ id, status: 'processing' })
   } catch (e) {
     console.error('[jobs] start error', e)
     return res.status(500).json({ ok: false, errorMessage: e && e.message ? e.message : String(e) })

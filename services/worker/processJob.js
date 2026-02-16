@@ -71,7 +71,39 @@ async function downloadFromGs(gsUriOrPath, dest) {
   const bucketObj = getBucketObject(bucketName)
   const remoteFile = bucketObj.file(filePath)
   const [exists] = await remoteFile.exists()
-  if (!exists) throw new Error('Source file not found: ' + filePath)
+  if (!exists) {
+    if (bucketName && bucketName.endsWith && bucketName.endsWith('.firebasestorage.app')) {
+      const alt = bucketName.replace('.firebasestorage.app', '.appspot.com')
+      try {
+        const altBucket = getBucketObject(alt)
+        const altFile = altBucket.file(filePath)
+        const [altExists] = await altFile.exists()
+        if (altExists) return await new Promise((resolve, reject) => {
+          const rs = altFile.createReadStream()
+          rs.on('error', reject)
+          const ws = fs.createWriteStream(dest)
+          ws.on('error', reject)
+          ws.on('finish', resolve)
+          rs.pipe(ws)
+        })
+      } catch (e) {}
+    }
+    // Try default bucket as a last resort
+    try {
+      const defaultBucket = admin.storage().bucket()
+      const defFile = defaultBucket.file(filePath)
+      const [defExists] = await defFile.exists()
+      if (defExists) return await new Promise((resolve, reject) => {
+        const rs = defFile.createReadStream()
+        rs.on('error', reject)
+        const ws = fs.createWriteStream(dest)
+        ws.on('error', reject)
+        ws.on('finish', resolve)
+        rs.pipe(ws)
+      })
+    } catch (e) {}
+    throw new Error('Source file not found: ' + filePath)
+  }
   // stream to destination to avoid loading entire file in memory
   await new Promise((resolve, reject) => {
     const rs = remoteFile.createReadStream()
@@ -92,13 +124,20 @@ async function uploadToBucket(localPath, destPath) {
 }
 
 async function processJob(jobId, inputSpec) {
-  const log = (msg, ...args) => console.log(new Date().toISOString(), `[worker:${jobId}]`, msg, ...args)
-  log('PROCESS START', { inputSpec: !!inputSpec })
-  console.log(new Date().toISOString(), `[worker:${jobId}] processJob starting`)
+  // structured JSON logger
+  function jlog(event, meta = {}) {
+    const base = { ts: new Date().toISOString(), event, jobId, workerId: process.env.RAILWAY_SERVICE_NAME || require('os').hostname() }
+    try { console.log(JSON.stringify(Object.assign(base, meta))) } catch (e) { console.log(base, meta) }
+  }
+
+  // legacy shim used in many places in this file
+  function log(event, ...args) { jlog(event, { args }) }
+
+  jlog('process_start', { hasInputSpec: !!inputSpec })
   try {
     if (!db) throw new Error('Firestore db not initialized')
 
-    await db.collection('jobs').doc(jobId).set({ status: 'processing', progress: 0, message: 'Processing started', startedAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true })
+    await db.collection('jobs').doc(jobId).set({ status: 'processing', progress: 0, message: 'Processing started', startedAt: admin.firestore.FieldValue.serverTimestamp(), lockedAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true })
 
     // Normalize inputSpec
     let downloadURL = null
@@ -120,7 +159,7 @@ async function processJob(jobId, inputSpec) {
     const localIn = path.resolve(tmpDir, `${jobId}-${base}`)
 
     // Fetch input
-    console.log(`DOWNLOADING INPUT ${jobId}`)
+    jlog('download_start')
     // Prefer storagePath/gsUri (stream from Firebase Admin) then fall back to downloadURL
     let downloaded = false
 
@@ -142,7 +181,7 @@ async function processJob(jobId, inputSpec) {
           ws.on('finish', resolve)
           rs.pipe(ws)
         })
-        console.log(`[worker] ${jobId} download complete ${localIn}`)
+        jlog('download_complete', { localIn })
         await db.collection('jobs').doc(jobId).set({ progress: 20, message: 'Downloaded from storagePath', updatedAt: Date.now() }, { merge: true })
         downloaded = true
       } catch (e) {
@@ -156,7 +195,7 @@ async function processJob(jobId, inputSpec) {
         console.log(`[worker] ${jobId} downloading using gsUri=${gsUri}`)
         await db.collection('jobs').doc(jobId).set({ progress: 5, message: 'Downloading from gsUri', updatedAt: Date.now() }, { merge: true })
         await downloadFromGs(gsUri, localIn)
-        console.log(`[worker] ${jobId} download complete ${localIn}`)
+        jlog('download_complete', { localIn })
         await db.collection('jobs').doc(jobId).set({ progress: 20, message: 'Downloaded from gsUri', updatedAt: Date.now() }, { merge: true })
         downloaded = true
       } catch (e) {
@@ -174,7 +213,7 @@ async function processJob(jobId, inputSpec) {
         console.log(`[worker] ${jobId} downloadURL alt=media=${containsAlt} token=${containsToken}`)
         await db.collection('jobs').doc(jobId).set({ progress: 5, message: 'Downloading from URL', updatedAt: Date.now() }, { merge: true })
         await streamDownload(downloadURL, localIn)
-        console.log(`[worker] ${jobId} download complete ${localIn}`)
+        jlog('download_complete', { localIn })
         await db.collection('jobs').doc(jobId).set({ progress: 20, message: 'Downloaded from URL', updatedAt: Date.now() }, { merge: true })
         downloaded = true
       } catch (e) {
@@ -186,11 +225,11 @@ async function processJob(jobId, inputSpec) {
       throw new Error('No input source provided or download failed')
     }
 
-      console.log(`[worker:${jobId}] stage=download/start`)
+      jlog('stage_download_start')
 
     // Processing step: run retention-edit pipeline (transcribe -> AI plan -> trim+concat)
-    console.log(`PROCESSING ${jobId}`)
-    console.log(`[worker:${jobId}] running retention-edit pipeline on ${localIn}`)
+    jlog('processing_start')
+    jlog('pipeline_start', { localIn })
     const stat = fs.statSync(localIn)
     const outDir = path.resolve(os.tmpdir(), 'autoed', 'results')
     fs.mkdirSync(outDir, { recursive: true })
@@ -213,36 +252,50 @@ async function processJob(jobId, inputSpec) {
     }
 
     // Helper: run shell commands with spawn, capture output, enforce timeout
+    // Also collect child processes so an overall timer can kill them.
+    const childProcs = []
     function runShellCommand(cmd, opts = {}) {
       const timeoutMs = typeof opts.timeoutMs === 'number' ? opts.timeoutMs : (15 * 60 * 1000) // default 15 minutes
       return new Promise((resolve, reject) => {
-        log('FFMPEG START', { cmd: cmd.slice ? cmd.slice(0,200) : String(cmd) })
+        jlog('ffmpeg_cmd_start', { cmd: cmd.slice ? cmd.slice(0,200) : String(cmd) })
         const proc = spawn(cmd, { shell: true })
+        childProcs.push(proc)
         let stdout = ''
         let stderr = ''
-        if (proc.stdout) proc.stdout.on('data', (d) => { stdout += String(d); if (stdout.length > 20000) stdout = stdout.slice(-20000) })
-        if (proc.stderr) proc.stderr.on('data', (d) => { stderr += String(d); if (stderr.length > 20000) stderr = stderr.slice(-20000) })
+        if (proc.stdout) proc.stdout.on('data', (d) => { stdout += String(d); if (stdout.length > 20000) stdout = stdout.slice(-20000); jlog('ffmpeg_stdout', { chunk: String(d).slice(0,200) }) })
+        if (proc.stderr) proc.stderr.on('data', (d) => { stderr += String(d); if (stderr.length > 20000) stderr = stderr.slice(-20000); jlog('ffmpeg_stderr', { chunk: String(d).slice(0,200) }) })
         const to = setTimeout(() => {
           try { proc.kill('SIGKILL') } catch (e) {}
           const err = new Error('process timeout')
           err.code = 'ETIMEDOUT'
           err.stdout = stdout
           err.stderr = stderr
+          jlog('ffmpeg_cmd_timeout', { code: err.code })
           reject(err)
         }, timeoutMs)
         proc.on('error', (err) => {
           clearTimeout(to)
           err.stdout = stdout
           err.stderr = stderr
-          log('FFMPEG ERROR', { err: err.message })
+          jlog('ffmpeg_cmd_error', { message: err.message })
           reject(err)
         })
         proc.on('close', (code, signal) => {
           clearTimeout(to)
-          log('FFMPEG DONE', { code, signal })
+          jlog('ffmpeg_cmd_done', { code, signal })
           resolve({ code, signal, stdout, stderr })
         })
       })
+    }
+
+    // overall processing timeout (kill any child processes)
+    const OVERALL_TIMEOUT_MS = Number(process.env.JOB_PROCESSING_TIMEOUT_MS || 20 * 60 * 1000)
+    let overallTimer = null
+    if (OVERALL_TIMEOUT_MS > 0) {
+      overallTimer = setTimeout(() => {
+        jlog('processing_overall_timeout', { timeoutMs: OVERALL_TIMEOUT_MS })
+        for (const p of childProcs) try { p.kill('SIGKILL') } catch (e) {}
+      }, OVERALL_TIMEOUT_MS)
     }
 
     // 1) Extract audio for transcription
@@ -318,7 +371,7 @@ async function processJob(jobId, inputSpec) {
     if (OPENAI_KEY && transcriptText) {
       try {
         aiPlan = await callOpenAIEditPlan(transcriptText, durationSec)
-        console.log('[worker] AI plan:', JSON.stringify(aiPlan, null, 2))
+        jlog('ai_plan', { plan: aiPlan })
       } catch (e) {
         console.warn('[worker] OpenAI plan failed', e && (e.stack || e.message || e))
         aiPlan = null
@@ -395,7 +448,7 @@ async function processJob(jobId, inputSpec) {
         keepSegments.push({ start: 0, end: stat.size ? stat.size : 0, reason: 'fallback_whole' })
       }
       aiPlan = { hook: { start: 0, end: Math.min(4, keepSegments[0] ? (keepSegments[0].end - keepSegments[0].start) : 4), reason: 'fallback hook' }, keepSegments, removeSegments, notes: { pacing: 'fallback silence-tighten', warnings: [] } }
-      console.log('[worker] fallback aiPlan', JSON.stringify(aiPlan, null, 2))
+      jlog('ai_plan_fallback', { plan: aiPlan })
     }
 
     // Build finalSegments: hook first, then keepSegments but remove overlaps with removeSegments
@@ -425,7 +478,7 @@ async function processJob(jobId, inputSpec) {
         } else merged.push(seg)
       }
     }
-    console.log('[worker] finalSegments', JSON.stringify(merged, null, 2))
+    jlog('final_segments', { segments: merged })
 
     if (!merged.length) throw new Error('No segments to render after AI plan/fallback')
 
@@ -511,8 +564,8 @@ async function processJob(jobId, inputSpec) {
 
     // Remap using only the safePlan zooms (guardrails-enforced)
     const remappedZooms = remapZoomsToFinal(safePlan.zooms || [], merged)
-    console.log('[worker] AI zooms (original, safePlan):', JSON.stringify(safePlan.zooms || [], null, 2))
-    console.log('[worker] AI zooms (remapped to final timeline):', JSON.stringify(remappedZooms, null, 2))
+    jlog('ai_zooms_original', { zooms: safePlan.zooms || [] })
+    jlog('ai_zooms_remapped', { zooms: remappedZooms })
 
     // 4) Render with ffmpeg trim+concat + zooms
     await setStage('Pacing', 80, 'Rendering final video with zooms')
@@ -582,10 +635,10 @@ async function processJob(jobId, inputSpec) {
     const concatInputs = merged.map((_, idx) => `[v${idx}][a${idx}]`).join('')
     const concat = `${concatInputs}concat=n=${merged.length}:v=1:a=1[outv][outa]`
     const fullFilter = filter + concat
-    console.log('[worker] ffmpeg filter_complex:', fullFilter)
+    jlog('ffmpeg_filter_complex', { filter: fullFilter.slice ? fullFilter.slice(0,1000) : String(fullFilter) })
 
     const ffCmd = `ffmpeg -y -i "${localIn}" -filter_complex "${fullFilter}" -map "[outv]" -map "[outa]" -c:v libx264 -preset veryfast -crf 23 -c:a aac -movflags +faststart "${localOut}"`
-    console.log('[worker] ffmpeg render cmd:', ffCmd)
+    jlog('ffmpeg_render_cmd', { cmd: ffCmd.slice ? ffCmd.slice(0,1000) : String(ffCmd) })
     try {
       const rr = await runShellCommand(ffCmd, { timeoutMs: 15 * 60 * 1000 })
       if (rr.stderr) log('FFMPEG STDERR', rr.stderr.slice(-2000))
@@ -596,12 +649,12 @@ async function processJob(jobId, inputSpec) {
       throw e
     }
     log('FFMPEG DONE')
-    console.log(new Date().toISOString(), `[worker:${jobId}] render finished, output at ${localOut}`)
+    jlog('render_finished', { output: localOut })
 
     // Upload result.json first (small, quick)
     const destResultPath = `results/${jobId}/result.json`
-    console.log(`JOB ${jobId} uploading result JSON to ${destResultPath}`)
-      console.log(`[worker:${jobId}] stage=upload`)
+    jlog('upload_result_json_start', { dest: destResultPath })
+      jlog('stage_upload')
 
     let resultUrl = null
     try {
@@ -616,7 +669,7 @@ async function processJob(jobId, inputSpec) {
     try {
       if (fs.existsSync(localOut)) {
         const bucket = admin.getBucket()
-        console.log(`[worker:${jobId}] uploading output video to ${destVideoPath}`)
+        jlog('upload_output_start', { dest: destVideoPath })
         await bucket.upload(localOut, { destination: destVideoPath, metadata: { contentType: 'video/mp4' } })
         try {
           // generate signed URL for the uploaded video (do not log)
@@ -632,27 +685,28 @@ async function processJob(jobId, inputSpec) {
     }
 
     // Update job doc: include output path and optionally signed URL for download
-    const jobUpdate = { status: 'COMPLETE', progress: 100, updatedAt: Date.now(), message: 'Completed' }
+    const jobUpdate = { status: 'completed', progress: 100, updatedAt: Date.now(), message: 'Completed' }
     if (resultUrl) jobUpdate.resultUrl = resultUrl
-      console.log(`[worker:${jobId}] stage=finalize`)
+      jlog('stage_finalize')
 
     if (outputUrl) jobUpdate.outputUrl = outputUrl
     jobUpdate.outputPath = destVideoPath
     await db.collection('jobs').doc(jobId).set(jobUpdate, { merge: true })
-    console.log(`[worker:${jobId}] completed, resultPath=${destResultPath} outputPath=${destVideoPath}`)
+    jlog('job_db_updated', { resultPath: destResultPath, outputPath: destVideoPath })
 
     // cleanup
     try { fs.unlinkSync(localIn) } catch (e) {}
     try { fs.unlinkSync(localResult) } catch (e) {}
 
   } catch (err) {
-    console.error(`JOB ERROR ${jobId}`, err && (err.stack || err.message || err))
+    const errMsg = err && (err.message || String(err))
+    const errStack = err && (err.stack || null)
+    jlog('job_error', { message: errMsg, stack: errStack })
     try {
-      if (db) await db.collection('jobs').doc(jobId).set({ status: 'FAILED', progress: 0, errorMessage: err && (err.message || String(err)), updatedAt: Date.now(), message: 'Processing error' }, { merge: true })
+      if (db) await db.collection('jobs').doc(jobId).set({ status: 'failed', progress: 0, errorMessage: errMsg, errorStack: errStack, failedAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp(), message: errMsg || 'Processing error' }, { merge: true })
     } catch (e) {
-      console.error(`[worker:${jobId}] failed to write error to Firestore`, e)
+      jlog('failed_to_write_error', { message: e && (e.message || String(e)) })
     }
-    console.log(`JOB ERROR ${jobId}`)
   }
 }
 

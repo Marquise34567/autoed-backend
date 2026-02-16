@@ -13,10 +13,10 @@ export async function normalizeToMp4(inputPath: string, outputPath: string, jobI
   fs.mkdirSync(outDir, { recursive: true });
 
   // Small helper to update job progress if jobId provided
-  const progress = (p: number, etaSec?: number, msg?: string) => {
+    const progress = (p: number, etaSec?: number, msg?: string) => {
     if (!jobId) return;
     try {
-      setJob(jobId, { status: "NORMALIZING", overallProgress: Math.max(0, Math.min(1, p)), overallEtaSec: etaSec ?? 0, message: msg ?? "Normalizing video" });
+      setJob(jobId, { phase: "normalizing", overallProgress: Math.max(0, Math.min(1, p)), overallEtaSec: etaSec ?? 0, message: msg ?? "Normalizing video" });
       appendJobLog(jobId, `NORMALIZING progress ${Math.round(p * 100)}% ${msg ?? ''}`);
     } catch (e) {
       // ignore
