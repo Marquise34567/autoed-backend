@@ -1,4 +1,4 @@
-const admin = require('firebase-admin')
+// firebase-admin already required above
 
 function getBucketNameFromEnv() {
   const raw = process.env.FIREBASE_STORAGE_BUCKET || ''
