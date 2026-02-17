@@ -186,19 +186,26 @@ router.get('/:id/download', async (req, res) => {
       }
     }
 
-    if (!filePath) filePath = `results/${id}/output.mp4`
+    // Only allow download when an explicit uploaded output path is present.
+    if (!filePath) {
+      // If the job exists but has failed, surface the real failure message.
+      if (job && job.status === 'failed') {
+        const em = job.errorMessage || job.error || 'Processing failed'
+        return res.status(400).json({ ok: false, error: 'job_failed', errorMessage: em })
+      }
+      return res.status(409).json({ ok: false, status: 'not_ready', message: 'Output not available yet', expectedGuess: `results/${id}/output.mp4` })
+    }
 
     try {
       const url = await getSignedUrlForPath(filePath, 60)
       return res.redirect(url)
     } catch (err) {
-      // If object not found, surface 404 with expected path
       const msg = err && err.message ? err.message : String(err)
       if (msg.includes('Storage object not found')) {
-        return res.status(404).json({ error: 'Output video not found', expected: filePath })
+        return res.status(404).json({ ok: false, error: 'Output video not found', expected: filePath })
       }
       console.error('[jobs:download] failed to generate signed URL', err && (err.stack || err.message || err))
-      return res.status(500).json({ error: 'download failed' })
+      return res.status(500).json({ ok: false, error: 'download_failed' })
     }
   } catch (e) {
     console.error('[jobs:download] error', e && (e.stack || e.message || e))

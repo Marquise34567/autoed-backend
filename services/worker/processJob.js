@@ -725,6 +725,7 @@ async function processJob(jobId, inputSpec) {
     // If a local output file exists, upload it to outputs/<jobId>.mp4
     const outputPath = `outputs/${jobId}.mp4`
     let outputUrl = null
+    let uploaded = false
     try {
       if (fs.existsSync(localOut)) {
         const bucketObj = getBucketObject()
@@ -740,10 +741,13 @@ async function processJob(jobId, inputSpec) {
         } catch (ee) { exists = false }
         console.log(`[worker] file exists: ${exists} for ${outputPath}`)
         if (!exists) throw new Error('Output upload failed: object not found after upload')
+        uploaded = true
         try {
           outputUrl = await getSignedUrlForPath(outputPath, 60)
         } catch (err) {
-          console.warn('[worker] failed to generate signed URL for video', err && (err.message || err))
+          // Signing failure should NOT cause the job to be marked failed — keep upload path and mark completed.
+          console.warn('[worker] failed to generate signed URL for video (signing error)', err && (err.message || err))
+          outputUrl = null
         }
       } else {
         console.warn(`[worker:${jobId}] no local output file found at ${localOut}; skipping video upload`)
@@ -770,18 +774,21 @@ async function processJob(jobId, inputSpec) {
       outputPath: outputPath || null,
     }
     jlog('stage_finalize')
-    // Only mark completed when we have a resultUrl. Otherwise mark failed.
-    if (jobUpdateBase.resultUrl) {
+    // Mark completed when the output was uploaded (preferred) or when a small result.json exists.
+    if (uploaded || jobUpdateBase.resultUrl) {
       const jobUpdate = Object.assign({ status: sanitizeStatus('completed'), phase: 'COMPLETED' }, jobUpdateBase)
-      await db.collection('jobs').doc(jobId).set(jobUpdate, { merge: true })
-      jlog('job_db_updated', { resultPath: outputPath, outputPath: outputPath })
-      // explicit log for worker visibility
-      console.log(`[worker] wrote resultPath ${outputPath} for ${jobId}`)
-      console.log('[worker] marked completed', jobId)
+      try {
+        await db.collection('jobs').doc(jobId).set(jobUpdate, { merge: true })
+        jlog('job_db_updated', { resultPath: outputPath, outputPath: outputPath, uploaded })
+        console.log(`[worker] wrote resultPath ${outputPath} for ${jobId}`)
+        console.log('[worker] marked completed', jobId)
+      } catch (e) {
+        jlog('job_db_update_failed', { error: e && e.message })
+      }
       // Return result info for worker to perform a final canonical update
       return { resultUrl: jobUpdate.resultUrl || null, finalVideoPath: jobUpdate.finalVideoPath || null }
     } else {
-      const errMsg = 'Processing finished but no resultUrl generated'
+      const errMsg = 'Processing finished but no output uploaded or result URL generated'
       const failedUpdate = Object.assign({ status: sanitizeStatus('failed'), phase: 'FAILED', progress: 0, error: errMsg, errorMessage: errMsg, message: errMsg, failedAt: admin.firestore.FieldValue.serverTimestamp() }, jobUpdateBase)
       await db.collection('jobs').doc(jobId).set(failedUpdate, { merge: true })
       jlog('job_db_updated_failed', { reason: errMsg, outputPath: outputPath })
