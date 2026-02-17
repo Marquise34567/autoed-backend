@@ -190,10 +190,10 @@ async function processJob(jobId, inputSpec) {
 
     // Persist outputPath early so callers never see a null outputPath when signing
     const uid = (jobDoc && (jobDoc.userId || jobDoc.uid)) || 'unknown'
-    const outputPath = `outputs/${uid}/${jobId}.mp4`
+    const initialOutputPath = `outputs/${uid}/${jobId}.mp4`
     try {
-      await updateJobPatch({ outputPath })
-      jlog('persisted_outputPath', { outputPath })
+      await updateJobPatch({ outputPath: initialOutputPath })
+      jlog('persisted_outputPath', { outputPath: initialOutputPath })
     } catch (e) {
       console.warn('[worker] failed to persist outputPath early', e && (e.message || e))
     }
@@ -762,7 +762,8 @@ async function processJob(jobId, inputSpec) {
         await db.collection('jobs').doc(jobId).set({ status: sanitizeStatus('failed'), phase: 'FAILED', progress: 0, errorMessage: e && (e.message || String(e)), errorStack: (e && e.stack) ? String(e.stack).slice(0,2000) : null, failedAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true })
         jlog('job_db_updated_failed', { reason: 'upload_failed', error: e && (e.message || String(e)) })
       } catch (ee) { jlog('failed_to_write_upload_error', { message: ee && ee.message }) }
-      return { resultUrl: null, finalVideoPath: null }
+      // Return structured failure for upload errors
+      return { success: false, error: 'Job execution failed', details: e && (e.message || String(e)) }
     }
 
     // Update job doc: include output path and signed URLs for download if available
@@ -789,14 +790,39 @@ async function processJob(jobId, inputSpec) {
       } catch (e) {
         jlog('job_db_update_failed', { error: e && e.message })
       }
-      // Return result info for worker to perform a final canonical update
-      return { resultUrl: jobUpdate.resultUrl || null, finalVideoPath: jobUpdate.finalVideoPath || null }
+
+      // Determine candidate path to sign
+      const candidatePath = jobUpdate.finalVideoPath || jobUpdate.outputPath || (jobDoc && jobDoc.outputPath) || null
+      if (!candidatePath) {
+        return { success: false, error: 'Output file missing before signing', path: null }
+      }
+
+      // Normalize and attempt signing (with retry handled by getSignedUrlDetailed)
+      try {
+        const { getSignedUrlDetailed } = require('../../utils/storageSignedUrl')
+        const signRes = await getSignedUrlDetailed(candidatePath, 60)
+        if (!signRes.success) {
+          const norm = signRes.debug && signRes.debug.path ? signRes.debug.path : (typeof candidatePath === 'string' ? candidatePath.replace(/^gs:\/\/[\w.-]+\//i, '').replace(/^\/+/, '') : candidatePath)
+          const bucketName = signRes.debug && signRes.debug.bucket ? signRes.debug.bucket : (getBucketObject() && getBucketObject().name ? getBucketObject().name : DEFAULT_BUCKET_NAME)
+          return { success: false, error: 'Signed URL generation failed', path: norm, bucket: bucketName, fileExists: !!(signRes.debug && signRes.debug.fileExists), details: signRes.error || null }
+        }
+        const normPath = signRes.debug && signRes.debug.path ? signRes.debug.path : (typeof candidatePath === 'string' ? candidatePath.replace(/^gs:\/\/[\w.-]+\//i, '').replace(/^\/+/, '') : candidatePath)
+        const bucketName = signRes.debug && signRes.debug.bucket ? signRes.debug.bucket : (getBucketObject() && getBucketObject().name ? getBucketObject().name : DEFAULT_BUCKET_NAME)
+        return { success: true, url: signRes.url, error: null, debug: { path: normPath, bucket: bucketName, fileExists: true } }
+      } catch (e) {
+        const msg = e && e.message ? e.message : String(e)
+        const norm = typeof candidatePath === 'string' ? candidatePath.replace(/^gs:\/\/[\w.-]+\//i, '').replace(/^\/+/, '') : candidatePath
+        const bucketName = getBucketObject() && getBucketObject().name ? getBucketObject().name : DEFAULT_BUCKET_NAME
+        return { success: false, error: 'Signed URL generation failed', path: norm, bucket: bucketName, fileExists: false, details: msg }
+      }
     } else {
       const errMsg = 'Processing finished but no output uploaded or result URL generated'
       const failedUpdate = Object.assign({ status: sanitizeStatus('failed'), phase: 'FAILED', progress: 0, error: errMsg, errorMessage: errMsg, message: errMsg, failedAt: admin.firestore.FieldValue.serverTimestamp() }, jobUpdateBase)
       await db.collection('jobs').doc(jobId).set(failedUpdate, { merge: true })
       jlog('job_db_updated_failed', { reason: errMsg, outputPath: outputPath })
-      return { resultUrl: null, finalVideoPath: null }
+      const candidatePath = outputPath || (jobDoc && (jobDoc.outputPath || jobDoc.finalVideoPath)) || null
+      const norm = candidatePath ? (typeof candidatePath === 'string' ? candidatePath.replace(/^gs:\/\/[\w.-]+\//i, '').replace(/^\/+/, '') : candidatePath) : null
+      return { success: false, error: 'Output file missing before signing', path: norm }
     }
 
     // cleanup
@@ -812,6 +838,7 @@ async function processJob(jobId, inputSpec) {
     } catch (e) {
       jlog('failed_to_write_error', { message: e && (e.message || String(e)) })
     }
+    return { success: false, error: 'Job execution failed', details: errMsg }
   }
 }
 
