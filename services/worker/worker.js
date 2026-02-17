@@ -111,7 +111,29 @@ async function claimOne() {
     console.log('[worker] query shape: collection=jobs where=status==queued limit=1')
     const q = await db.collection('jobs').where('status', '==', 'queued').limit(1).get()
     if (q.empty) {
+      const projectIdUsed = (admin && admin.app && admin.app().options && admin.app().options.projectId) || process.env.FIREBASE_PROJECT_ID || null
       log(null, 'scan result: 0 queued jobs')
+      try {
+        log(null, 'worker projectIdUsed=', projectIdUsed)
+      } catch (e) { /* ignore */ }
+      // Fallback: list a few recent job docs to show what the worker can see
+      try {
+        let recentSnap = null
+        try {
+          recentSnap = await db.collection('jobs').orderBy('createdAt', 'desc').limit(3).get()
+        } catch (e) {
+          // If ordering by createdAt requires an index or fails, fallback to simple limit
+          recentSnap = await db.collection('jobs').limit(3).get()
+        }
+        if (recentSnap && !recentSnap.empty) {
+          const ids = recentSnap.docs.map(d => ({ id: d.id, status: (d.data() && d.data().status) || null }))
+          log(null, 'recent jobs visible to worker:', JSON.stringify(ids))
+        } else {
+          log(null, 'no recent jobs visible to worker (jobs collection appears empty)')
+        }
+      } catch (e) {
+        log(null, 'failed to run fallback recent jobs probe', e && (e.message || e))
+      }
       return null
     }
     const doc = q.docs[0]
@@ -175,6 +197,8 @@ async function workerLoop() {
       }
       const jobId = claimed.id
       log(jobId, `picked job ${jobId}`)
+      // Explicit, human-friendly log for CI/railway logs
+      try { console.log('[worker] picked job', jobId) } catch (e) {}
       // fetch latest data
       const snap = await db.collection('jobs').doc(jobId).get()
       const jobDoc = snap.exists ? snap.data() : null

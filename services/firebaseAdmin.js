@@ -39,7 +39,7 @@ try {
     let pkey = process.env.FIREBASE_PRIVATE_KEY
     if (pid && cemail && pkey) {
       try {
-        pkey = String(pkey).replace(/\\n/g, '\n')
+        pkey = String(pkey).replace(/\n/g, '\n')
         credential = adminLib.credential.cert({ projectId: pid, clientEmail: cemail, privateKey: pkey })
       } catch (e) {
         console.error('[firebaseAdmin] Failed to initialize credential from env vars', e && (e.message || e))
@@ -62,17 +62,49 @@ try {
   } else {
     admin = adminLib
     if (!admin.apps.length) {
-      admin.initializeApp({ credential, storageBucket })
-      console.log('[startup] Firebase initialized OK:', storageBucket)
+      // Build explicit init options to avoid ambiguity
+      const initOptions = { credential }
+      if (process.env.FIREBASE_PROJECT_ID) initOptions.projectId = process.env.FIREBASE_PROJECT_ID
+      if (process.env.FIREBASE_STORAGE_BUCKET) initOptions.storageBucket = process.env.FIREBASE_STORAGE_BUCKET
+
+      admin.initializeApp(initOptions)
+      console.log('[firebaseAdmin] Firebase initialized OK')
+      try {
+        const appInstance = (admin && admin.app) ? admin.app() : null
+        console.log('[fb] projectId(app.options)=', appInstance && appInstance.options && appInstance.options.projectId)
+        console.log('[fb] FIREBASE_PROJECT_ID=', process.env.FIREBASE_PROJECT_ID || null)
+        console.log('[fb] GOOGLE_CLOUD_PROJECT=', process.env.GOOGLE_CLOUD_PROJECT || null)
+        console.log('[fb] FIRESTORE_EMULATOR_HOST=', process.env.FIRESTORE_EMULATOR_HOST || null)
+        console.log('[fb] storageBucket(app.options)=', appInstance && appInstance.options && appInstance.options.storageBucket)
+        console.log('[fb] FIREBASE_STORAGE_BUCKET=', process.env.FIREBASE_STORAGE_BUCKET || null)
+        if (process.env.FIRESTORE_EMULATOR_HOST) console.warn('[fb] WARNING: FIRESTORE_EMULATOR_HOST is set; production will not see real Firestore.')
+      } catch (e) { console.warn('[firebaseAdmin] failed to log projectId/envs', e && e.message) }
     }
     db = admin.firestore()
     try { bucket = admin.storage().bucket(storageBucket) } catch (e) { bucket = null }
+
+    // Log Firestore settings for debugging (non-sensitive)
+    try {
+      const dbSettings = db && db._settings ? db._settings : null
+      console.log('[firebaseAdmin] firestore settings:', dbSettings)
+      if (db && db._databaseId) console.log('[firebaseAdmin] firestore databaseId=', db._databaseId)
+    } catch (e) { console.warn('[firebaseAdmin] failed to read firestore settings', e && e.message) }
 
     // Attach convenience properties to the admin object for backwards-compatibility
     try { admin.db = db } catch (e) {}
     try { admin.bucket = bucket } catch (e) {}
     admin.getBucket = (name) => admin.storage().bucket(name || storageBucket)
     admin.getBucketName = () => storageBucket
+
+    // Expose the initialized App instance and projectIdUsed for diagnostics
+    try {
+      const appInstance = (admin && admin.apps && admin.apps[0]) ? admin.apps[0] : (admin.app ? admin.app() : null)
+      const projectIdUsed = (appInstance && appInstance.options && appInstance.options.projectId) ? appInstance.options.projectId : (process.env.FIREBASE_PROJECT_ID || null)
+      admin.appInstance = appInstance
+      admin.projectIdUsed = projectIdUsed
+    } catch (e) {
+      console.warn('[firebaseAdmin] failed to attach appInstance/projectIdUsed', e && e.message)
+    }
 
     // Export the admin library as the module, but keep `admin.db` and `admin.bucket`
     // so callers using either `const admin = require('...')` or

@@ -633,6 +633,8 @@ app.post('/api/upload-url', async (req, res) => {
     return res.status(500).json({ error: 'Failed to generate signed URL', details: error && error.message })
   }
 })
+  // Mount upload-complete handler so clients can notify the server after a successful direct-to-storage upload.
+  try { app.use('/api/upload-complete', require('./routes/upload-complete')) } catch (e) { console.warn('[routes] failed to mount /api/upload-complete', e && e.message ? e.message : e) }
 try { console.log('Mounted /api/upload') } catch (e) {}
 // Signed-upload endpoints removed to enforce client-side Firebase SDK uploads.
 // Debug routes removed (signed URL debug endpoints disabled)
