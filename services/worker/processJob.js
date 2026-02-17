@@ -167,14 +167,24 @@ async function processJob(jobId, inputSpec) {
 
     await updateJobPatch({ status: sanitizeStatus('processing'), phase: 'PROCESSING', progress: clampProgress(5), message: 'Processing started', startedAt: admin.firestore.FieldValue.serverTimestamp(), lockedAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() })
 
+<<<<<<< HEAD
     // Resolve input path from job document with fallbacks (prefer `inputPath`)
+=======
+    // Read job doc and resolve input path with fallbacks
+>>>>>>> origin/main
     let storagePath = null
     let bucketName = process.env.FIREBASE_STORAGE_BUCKET || DEFAULT_BUCKET_NAME || null
     let jobDoc = null
     try {
       const jobSnap = await db.collection('jobs').doc(jobId).get()
       jobDoc = jobSnap && jobSnap.exists ? jobSnap.data() : null
+<<<<<<< HEAD
       storagePath = jobDoc && (jobDoc.inputPath || jobDoc.bucketPath || (jobDoc.input && jobDoc.input.storagePath) || jobDoc.storagePath) ? (jobDoc.inputPath || jobDoc.bucketPath || (jobDoc.input && jobDoc.input.storagePath) || jobDoc.storagePath) : null
+=======
+      // resolve input path priority: inputPath -> bucketPath -> input.storagePath -> input.bucketPath
+      const resolved = jobDoc && (jobDoc.inputPath || jobDoc.bucketPath || (jobDoc.input && jobDoc.input.storagePath) || (jobDoc.input && jobDoc.input.bucketPath))
+      storagePath = resolved || null
+>>>>>>> origin/main
       jlog('job_doc_input_resolution', { inputPath: jobDoc && jobDoc.inputPath || null, bucketPath: jobDoc && jobDoc.bucketPath || null, input_storagePath: jobDoc && jobDoc.input && jobDoc.input.storagePath || null })
     } catch (e) {
       throw new Error('Failed to read job document: ' + (e && e.message))
@@ -184,6 +194,7 @@ async function processJob(jobId, inputSpec) {
       throw new Error('No input path on job')
     }
 
+<<<<<<< HEAD
     // build canonical gsUri for logging/consumption and derive downloadURL
     const downloadURL = (jobDoc && jobDoc.input && jobDoc.input.downloadURL) || (jobDoc && jobDoc.downloadURL) || (inputSpec && inputSpec.downloadURL) || null
     const inputGsUri = (jobDoc && jobDoc.input && jobDoc.input.gsUri) || (bucketName && storagePath ? `gs://${bucketName}/${storagePath}` : null)
@@ -198,6 +209,12 @@ async function processJob(jobId, inputSpec) {
       console.warn('[worker] failed to persist outputPath early', e && (e.message || e))
     }
 
+=======
+    // Build canonical gsUri when possible and derive downloadURL if present
+    const downloadURL = (jobDoc && jobDoc.input && jobDoc.input.downloadURL) || (jobDoc && jobDoc.downloadURL) || (inputSpec && inputSpec.downloadURL) || null
+    const inputGsUri = (jobDoc && jobDoc.input && jobDoc.input.gsUri) || (bucketName && storagePath ? `gs://${bucketName}/${storagePath}` : null)
+
+>>>>>>> origin/main
     // Log normalized input source
     jlog('normalized_input', { bucketName, storagePath, inputGsUri })
     try { console.log('[worker] Worker reading input from:', bucketName, storagePath, inputGsUri) } catch (e) {}
@@ -717,9 +734,15 @@ async function processJob(jobId, inputSpec) {
       console.warn(`[worker:${jobId}] failed to upload result.json`, e && (e.message || e))
     }
 
+<<<<<<< HEAD
     // If a local output file exists, upload it to outputs/<userId>/<jobId>.mp4
     const userIdForPath = (jobDoc && jobDoc.userId) ? String(jobDoc.userId) : 'anonymous'
     const outputPath = `outputs/${userIdForPath}/${jobId}.mp4`
+=======
+    // If a local output file exists, upload it to outputs/<uid>/<jobId>.mp4
+    const uid = (jobDoc && jobDoc.userId) ? String(jobDoc.userId) : (jobDoc && jobDoc.user && jobDoc.user.id ? String(jobDoc.user.id) : 'unknown')
+    const outputPath = `outputs/${uid}/${jobId}.mp4`
+>>>>>>> origin/main
     let outputUrl = null
     let uploaded = false
     try {

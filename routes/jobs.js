@@ -296,6 +296,10 @@ router.post('/', async (req, res) => {
     const body = req.body || {}
     const authHeader = req.headers && req.headers.authorization
     let userId = body.userId || null
+<<<<<<< HEAD
+=======
+    // If Authorization is a Bearer token, verify with Firebase Admin to extract UID
+>>>>>>> origin/main
     if (!userId && authHeader) {
       try {
         const token = authHeader && authHeader.startsWith && authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader
@@ -304,7 +308,11 @@ router.post('/', async (req, res) => {
           if (decoded && decoded.uid) userId = decoded.uid
         }
       } catch (e) {
+<<<<<<< HEAD
         console.warn('[jobs] failed to verify id token', e && e.message || e)
+=======
+        console.warn('[jobs] failed to verify auth token, falling back to provided userId/text')
+>>>>>>> origin/main
       }
     }
     if (!userId) return res.status(401).json({ ok: false, error: 'missing_user' })
