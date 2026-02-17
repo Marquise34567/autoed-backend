@@ -2,7 +2,8 @@ const express = require('express')
 const crypto = require('crypto')
 const router = express.Router()
 // note: heavy processing moved to worker; keep route lightweight
-const { admin, db } = require('../services/firebaseAdmin')
+const admin = require('../services/firebaseAdmin')
+const db = (admin && admin.db) || null
 const { getSignedUrlForPath, attachSignedUrlsToJob } = require('../utils/storageSignedUrl')
 const { enqueue, reenqueue, listQueued } = require('../services/worker/queue')
 // db is defined above
@@ -277,7 +278,19 @@ router.post('/', async (req, res) => {
     // Basic user validation: require an Authorization header or explicit userId in body
     const body = req.body || {}
     const authHeader = req.headers && req.headers.authorization
-    const userId = body.userId || (authHeader ? String(authHeader).slice(0, 256) : null)
+    let userId = body.userId || null
+    // If Authorization is a Bearer token, verify with Firebase Admin to extract UID
+    if (!userId && authHeader) {
+      try {
+        const token = authHeader && authHeader.startsWith && authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader
+        if (admin && admin.auth && typeof admin.auth === 'function') {
+          const decoded = await admin.auth().verifyIdToken(token)
+          if (decoded && decoded.uid) userId = decoded.uid
+        }
+      } catch (e) {
+        console.warn('[jobs] failed to verify auth token, falling back to provided userId/text')
+      }
+    }
     if (!userId) return res.status(401).json({ ok: false, error: 'missing_user' })
 
     if (!db || !admin) {

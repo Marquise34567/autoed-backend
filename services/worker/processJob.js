@@ -167,31 +167,37 @@ async function processJob(jobId, inputSpec) {
 
     await updateJobPatch({ status: sanitizeStatus('processing'), phase: 'PROCESSING', progress: clampProgress(5), message: 'Processing started', startedAt: admin.firestore.FieldValue.serverTimestamp(), lockedAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() })
 
-    // Use `bucketPath` exactly from the Firestore job document.
-    // Do NOT reconstruct or prefer other fields — rely on the canonical `bucketPath` stored in the job.
+    // Read job doc and resolve input path with fallbacks
     let storagePath = null
     let bucketName = process.env.FIREBASE_STORAGE_BUCKET || DEFAULT_BUCKET_NAME || null
+    let jobDoc = null
     try {
       const jobSnap = await db.collection('jobs').doc(jobId).get()
-      const jobDoc = jobSnap && jobSnap.exists ? jobSnap.data() : null
-      storagePath = jobDoc && jobDoc.bucketPath ? jobDoc.bucketPath : null
-      jlog('job_doc_bucketPath', { bucketPath: storagePath })
+      jobDoc = jobSnap && jobSnap.exists ? jobSnap.data() : null
+      // resolve input path priority: inputPath -> bucketPath -> input.storagePath -> input.bucketPath
+      const resolved = jobDoc && (jobDoc.inputPath || jobDoc.bucketPath || (jobDoc.input && jobDoc.input.storagePath) || (jobDoc.input && jobDoc.input.bucketPath))
+      storagePath = resolved || null
+      jlog('job_doc_input_resolution', { inputPath: jobDoc && jobDoc.inputPath || null, bucketPath: jobDoc && jobDoc.bucketPath || null, input_storagePath: jobDoc && jobDoc.input && jobDoc.input.storagePath || null })
     } catch (e) {
       throw new Error('Failed to read job document: ' + (e && e.message))
     }
 
     if (!storagePath) {
-      throw new Error('Missing bucketPath in job document')
+      throw new Error('No input path on job')
     }
 
-    // Log normalized input source (use explicit bucket)
-    jlog('normalized_input', { bucketName, storagePath })
-    try { console.log('[worker] Worker reading input from:', bucketName, storagePath) } catch (e) {}
+    // Build canonical gsUri when possible and derive downloadURL if present
+    const downloadURL = (jobDoc && jobDoc.input && jobDoc.input.downloadURL) || (jobDoc && jobDoc.downloadURL) || (inputSpec && inputSpec.downloadURL) || null
+    const inputGsUri = (jobDoc && jobDoc.input && jobDoc.input.gsUri) || (bucketName && storagePath ? `gs://${bucketName}/${storagePath}` : null)
+
+    // Log normalized input source
+    jlog('normalized_input', { bucketName, storagePath, inputGsUri })
+    try { console.log('[worker] Worker reading input from:', bucketName, storagePath, inputGsUri) } catch (e) {}
 
     // Prepare tmp
     const tmpDir = path.resolve(os.tmpdir(), 'autoed', 'uploads')
     fs.mkdirSync(tmpDir, { recursive: true })
-    const base = (gsUri || storagePath || (downloadURL ? path.basename(new URL(downloadURL).pathname) : `download-${jobId}.bin`)).replace(/[^a-z0-9.\-_\.]/gi, '_')
+    const base = (inputGsUri || storagePath || (downloadURL ? path.basename(new URL(downloadURL).pathname) : `download-${jobId}.bin`)).replace(/[^a-z0-9.\-_\.]/gi, '_')
     const localIn = path.resolve(tmpDir, `${jobId}-${base}`)
 
     // Fetch input
@@ -226,11 +232,11 @@ async function processJob(jobId, inputSpec) {
     }
 
     // 2) gsUri (if not yet downloaded)
-    if (!downloaded && gsUri) {
+    if (!downloaded && inputGsUri) {
       try {
-        console.log(`[worker] ${jobId} downloading using gsUri=${gsUri}`)
+        console.log(`[worker] ${jobId} downloading using gsUri=${inputGsUri}`)
         await updateJobPatch({ progress: 5, message: 'Downloading from gsUri', updatedAt: admin.firestore.FieldValue.serverTimestamp() })
-        await downloadFromGs(gsUri, localIn)
+        await downloadFromGs(inputGsUri, localIn)
         jlog('download_complete', { localIn })
         await updateJobPatch({ progress: 20, message: 'Downloaded from gsUri', updatedAt: admin.firestore.FieldValue.serverTimestamp() })
         downloaded = true
@@ -703,8 +709,9 @@ async function processJob(jobId, inputSpec) {
       console.warn(`[worker:${jobId}] failed to upload result.json`, e && (e.message || e))
     }
 
-    // If a local output file exists, upload it to outputs/<jobId>.mp4
-    const outputPath = `outputs/${jobId}.mp4`
+    // If a local output file exists, upload it to outputs/<uid>/<jobId>.mp4
+    const uid = (jobDoc && jobDoc.userId) ? String(jobDoc.userId) : (jobDoc && jobDoc.user && jobDoc.user.id ? String(jobDoc.user.id) : 'unknown')
+    const outputPath = `outputs/${uid}/${jobId}.mp4`
     let outputUrl = null
     let uploaded = false
     try {
