@@ -9,8 +9,7 @@ const { listQueued } = require('./queue')
 // `db` provided by services/firebaseAdmin
 
 if (!db) {
-  console.error('Firestore db is undefined')
-  process.exit(1)
+  console.warn('[worker] Firestore db is undefined; worker will not start until db is available')
 }
 
 const os = require('os')
@@ -18,7 +17,8 @@ const POLL_MS = parseInt(process.env.WORKER_POLL_MS || '2000', 10)
 const CONCURRENCY = parseInt(process.env.WORKER_CONCURRENCY || '2', 10)
 function envTrue(v) { return ["1", "true", "yes", "y", "on"].includes(String(v || "").toLowerCase()) }
 const isProd = process.env.NODE_ENV === 'production'
-const WORKER_ENABLED = process.env.WORKER_ENABLED == null ? !isProd : envTrue(process.env.WORKER_ENABLED)
+// Align worker enablement with index.js: only enable when WORKER_ENABLED==='true'
+const WORKER_ENABLED = String(process.env.WORKER_ENABLED) === 'true'
 const PROCESSING_TIMEOUT_MS = parseInt(process.env.JOB_PROCESSING_TIMEOUT_MS || String(30 * 60 * 1000), 10)
 
 let started = false
@@ -195,8 +195,8 @@ async function workerLoop() {
 function start() {
   if (!WORKER_ENABLED) return log(null, 'WORKER_ENABLED not true; skipping start')
   if (!db) {
-    console.error('[worker] db missing')
-    process.exit(1)
+    console.error('[worker] db missing; aborting worker start (will not crash process)')
+    return
   }
   // check ffmpeg availability
   try {

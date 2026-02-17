@@ -695,8 +695,7 @@ async function processJob(jobId, inputSpec) {
       console.error(`[worker:${jobId}] failed to upload output video`, e && (e.stack || e.message || e))
     }
 
-    // Update job doc: include output path and optionally signed URL for download
-<<<<<<< HEAD
+    // Update job doc: include output path and signed URLs for download if available
     const jobUpdate = {
       status: sanitizeStatus('completed'),
       progress: 100,
@@ -704,16 +703,10 @@ async function processJob(jobId, inputSpec) {
       message: 'Completed',
       resultUrl: outputUrl || resultUrl || null,
       finalVideoPath: destVideoPath || null,
+      outputUrl: outputUrl || null,
+      outputPath: destVideoPath || null,
     }
     jlog('stage_finalize')
-=======
-    const jobUpdate = { status: 'completed', progress: 100, updatedAt: admin.firestore.FieldValue.serverTimestamp(), message: 'Completed' }
-    if (resultUrl) jobUpdate.resultUrl = resultUrl
-    jlog('stage_finalize')
-
-    if (outputUrl) jobUpdate.outputUrl = outputUrl
-    jobUpdate.outputPath = destVideoPath
->>>>>>> 328579ee08052cdf0354f3f2d4b1f16417caa78c
     await db.collection('jobs').doc(jobId).set(jobUpdate, { merge: true })
     jlog('job_db_updated', { resultPath: destResultPath, outputPath: destVideoPath })
 
