@@ -61,12 +61,7 @@ router.get('/', async (req, res) => {
         if (snap && snap.exists) {
             let job = snap.data() || {}
             console.log('[jobs] GET', qid, 'data:', job)
-            // Only attach signed URLs for completed jobs that have a finalVideoPath
-            try {
-              if (String((job.status || job.phase || '')).toLowerCase() === 'completed' && job.finalVideoPath) {
-                job = await attachSignedUrlsToJob(job, 30)
-              }
-            } catch (e) {}
+            // Do NOT generate signed URLs during the status request. Return stored fields only.
           // Normalize but return canonical fields explicitly to avoid HTTP codes leaking into `status`
           const norm = normalizeJobRecord(job)
           // Enforce: a job must not be considered completed without a resultUrl
@@ -113,15 +108,7 @@ router.get('/', async (req, res) => {
         const snaps = await db.collection('jobs').orderBy('createdAt', 'desc').limit(100).get()
       let arr = []
       snaps.forEach(s => arr.push(s.data()))
-      // Only attach signed URLs for completed jobs with a finalVideoPath
-      try {
-        arr = await Promise.all(arr.map(async (j) => {
-          if (String((j.status || j.phase || '')).toLowerCase() === 'completed' && j.finalVideoPath) {
-            try { return await attachSignedUrlsToJob(j, 30) } catch (e) { return j }
-          }
-          return j
-        }))
-      } catch (e) {}
+      // Do NOT attach signed URLs in the list endpoint. Return stored fields only.
       arr = arr.map(normalizeJobRecord)
       return res.status(200).json({ ok: true, jobs: arr, queued: listQueued() })
     }
@@ -144,7 +131,7 @@ router.get('/:id', async (req, res) => {
       const snap = await db.collection('jobs').doc(id).get()
       if (snap && snap.exists) {
           let job = snap.data()
-          try { job = await attachSignedUrlsToJob(job, 30) } catch (e) {}
+          // Do NOT attach signed URLs here; status endpoints return stored fields only.
           job = normalizeJobRecord(job)
           // If a legacy job reports completed but has no resultUrl, mark failed
           if (job.status === 'completed' && !job.resultUrl) {
@@ -164,11 +151,7 @@ router.get('/:id', async (req, res) => {
         }
     }
     let job = jobs.get(id) || null
-    try {
-      if (job && String((job.status || job.phase || '')).toLowerCase() === 'completed' && job.finalVideoPath) {
-        job = await attachSignedUrlsToJob(job, 30)
-      }
-    } catch (e) {}
+    // Do not attach signed URLs for in-memory jobs either; return stored fields only
     job = normalizeJobRecord(job)
     const out = {
       id: job.id,
@@ -220,6 +203,42 @@ router.get('/:id/download', async (req, res) => {
   } catch (e) {
     console.error('[jobs:download] error', e && (e.stack || e.message || e))
     return res.status(500).json({ ok: false, error: 'Download failed' })
+  }
+})
+
+// Dedicated endpoint to fetch a signed output URL only when the output file exists.
+router.get('/:id/output-url', async (req, res) => {
+  const id = req.params.id
+  if (!id) return res.status(400).json({ ok: false, error: 'Missing id' })
+  try {
+    if (!db) return res.status(500).json({ ok: false, error: 'Firestore not available' })
+    const snap = await db.collection('jobs').doc(id).get()
+    if (!snap.exists) return res.status(404).json({ ok: false, error: 'Job not found' })
+    const job = snap.data() || {}
+    // Prefer canonical fields for output path
+    const outputPath = job.outputPath || job.resultPath || job.finalVideoPath || job.outputFile || null
+    if (!outputPath) {
+      console.log('[output-url] jobId=' + id + ' outputPath missing -> not_ready')
+      return res.status(409).json({ status: 'not_ready', message: 'Output not available yet', jobId: id, phase: job.phase || job.status || null })
+    }
+    console.log('[output-url] jobId=' + id + ' outputPath=' + outputPath + ' checking existence')
+    try {
+      const url = await getSignedUrlForPath(outputPath, 15)
+      const expiresAt = Date.now() + (15 * 60 * 1000)
+      console.log('[output-url] jobId=' + id + ' signed url generated')
+      return res.status(200).json({ ok: true, url, expiresAt })
+    } catch (e) {
+      const msg = e && e.message ? e.message : String(e)
+      if (msg.includes('Storage object not found')) {
+        console.log('[output-url] jobId=' + id + ' outputPath exists check -> not uploaded yet')
+        return res.status(409).json({ status: 'not_ready', message: 'Output not uploaded yet', jobId: id, phase: job.phase || job.status || null })
+      }
+      console.error('[output-url] jobId=' + id + ' error generating signed url', e && (e.stack || e.message || e))
+      return res.status(500).json({ ok: false, error: 'failed_to_generate_signed_url' })
+    }
+  } catch (e) {
+    console.error('[output-url] error', e && (e.stack || e.message || e))
+    return res.status(500).json({ ok: false, error: 'internal_error' })
   }
 })
 

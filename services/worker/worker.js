@@ -21,6 +21,7 @@ const isProd = process.env.NODE_ENV === 'production'
 // Align worker enablement with index.js: only enable when WORKER_ENABLED==='true'
 const WORKER_ENABLED = String(process.env.WORKER_ENABLED) === 'true'
 const PROCESSING_TIMEOUT_MS = parseInt(process.env.JOB_PROCESSING_TIMEOUT_MS || String(30 * 60 * 1000), 10)
+const UPLOAD_STALE_HOURS = parseInt(process.env.UPLOAD_STALE_HOURS || String(48), 10)
 
 let started = false
 let stopping = false
@@ -74,8 +75,7 @@ async function claimOne() {
         return allowed.includes(v) ? v : null
       }
     if (PROCESSING_TIMEOUT_MS > 0) {
-      const cutoffMs = Date.now() - PROCESSING_TIMEOUT_MS
-      // Avoid composite-index queries: fetch processing/uploading docs and filter client-side
+      // For general processing timeout use PROCESSING_TIMEOUT_MS, for stale uploads use UPLOAD_STALE_HOURS
       const checkStatuses = ['processing', 'uploading']
       for (const st of checkStatuses) {
         try {
@@ -88,10 +88,16 @@ async function claimOne() {
                 if (data.updatedAt && data.updatedAt.toMillis) updatedMillis = data.updatedAt.toMillis()
                 else updatedMillis = new Date(data.updatedAt || 0).getTime()
               } catch (e) { updatedMillis = 0 }
+              let cutoffMs = Date.now() - PROCESSING_TIMEOUT_MS
+              let failMessage = 'Job timed out (watchdog)'
+              if (st === 'uploading') {
+                cutoffMs = Date.now() - (UPLOAD_STALE_HOURS * 60 * 60 * 1000)
+                failMessage = 'Upload never completed (watchdog)'
+              }
               if (updatedMillis && updatedMillis < cutoffMs) {
                 try {
-                  await doc.ref.set({ status: 'failed', errorMessage: 'Job timed out (watchdog)', failedAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp(), progress: 0 }, { merge: true })
-                  log(doc.id, `watchdog marked ${st} as failed due to timeout`)
+                  await doc.ref.set({ status: 'failed', errorMessage: failMessage, failedAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp(), progress: 0 }, { merge: true })
+                  log(doc.id, `watchdog marked ${st} as failed: ${failMessage}`)
                 } catch (e) { log(doc.id, 'watchdog failed to mark', e && (e.message || e)) }
               }
             }
