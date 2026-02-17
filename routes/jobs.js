@@ -311,6 +311,7 @@ router.post('/', async (req, res) => {
         createdAt: now,
         updatedAt: now,
         inputPath: storagePath,
+        bucketPath: storagePath,
         input: inputSpec,
       }, { merge: true })
     } catch (err) {
