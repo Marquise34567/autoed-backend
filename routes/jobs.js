@@ -183,16 +183,38 @@ router.get('/', async (req, res) => {
       if (db) {
         const snap = await db.collection('jobs').doc(qid).get()
         if (snap && snap.exists) {
-          let job = snap.data()
+          let job = snap.data() || {}
+          console.log('[jobs] GET', qid, 'data:', job)
           try { job = await attachSignedUrlsToJob(job, 30) } catch (e) {}
-          job = normalizeJobRecord(job)
-          return res.status(200).json({ ok: true, job })
+          // Normalize but return canonical fields explicitly to avoid HTTP codes leaking into `status`
+          const norm = normalizeJobRecord(job)
+          const out = {
+            ok: true,
+            jobId: norm.id || qid,
+            status: norm.status || 'queued',
+            progress: Number.isFinite(Number(norm.progress)) ? Number(norm.progress) : null,
+            resultUrl: norm.resultUrl || null,
+            finalVideoPath: norm.finalVideoPath || null,
+            error: norm.errorMessage || norm.error || null,
+            updatedAt: norm.updatedAt || null
+          }
+          return res.status(200).json(out)
         }
       }
       let job = jobs.get(qid) || null
       try { job = await attachSignedUrlsToJob(job, 30) } catch (e) {}
       job = normalizeJobRecord(job)
-      return res.status(200).json({ ok: true, job })
+      const out = {
+        ok: true,
+        jobId: job && job.id || qid,
+        status: job && job.status || 'queued',
+        progress: job && Number.isFinite(Number(job.progress)) ? Number(job.progress) : null,
+        resultUrl: job && job.resultUrl || null,
+        finalVideoPath: job && job.finalVideoPath || null,
+        error: job && (job.errorMessage || job.error) || null,
+        updatedAt: job && job.updatedAt || null
+      }
+      return res.status(200).json(out)
     }
 
     // list all — prefer Firestore collection if available
