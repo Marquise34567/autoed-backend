@@ -4,18 +4,56 @@ if (process.env.NODE_ENV !== 'production') {
   process.env.GRPC_VERBOSITY = process.env.GRPC_VERBOSITY || 'DEBUG'
 }
 
-process.on('unhandledRejection', (err) => {
-  console.error('🚨 UNHANDLED REJECTION 🚨', err)
+function _logCrash(kind, err, extra = {}) {
+  try {
+    const out = Object.assign({
+      ts: new Date().toISOString(),
+      kind,
+      pid: process.pid,
+      message: err && (err.message || String(err)) || null,
+      stack: err && err.stack ? String(err.stack) : null,
+    }, extra)
+    console.error(JSON.stringify(out))
+  } catch (e) {
+    console.error(kind, err)
+  }
+}
+
+process.on('unhandledRejection', (reason, p) => {
+  _logCrash('UNHANDLED_REJECTION', reason, { promise: !!p })
 })
 
 process.on('uncaughtException', (err) => {
-  console.error('🚨 UNCAUGHT EXCEPTION 🚨', err)
+  _logCrash('UNCAUGHT_EXCEPTION', err)
+  try { process.exit(1) } catch (e) { /* best-effort */ }
 })
 
 // Minimal production-ready server entry (JavaScript)
 if (process.env.NODE_ENV !== 'production') {
   try { require('dotenv').config() } catch (e) {}
 }
+
+// Startup environment validation: ensure Firebase credential information is present
+function validateStartupEnv() {
+  const hasSa = !!(process.env.FIREBASE_SERVICE_ACCOUNT_JSON && String(process.env.FIREBASE_SERVICE_ACCOUNT_JSON).trim())
+  const missing = []
+  if (!hasSa) {
+    if (!process.env.FIREBASE_PROJECT_ID) missing.push('FIREBASE_PROJECT_ID')
+    if (!process.env.FIREBASE_CLIENT_EMAIL) missing.push('FIREBASE_CLIENT_EMAIL')
+    if (!process.env.FIREBASE_PRIVATE_KEY) missing.push('FIREBASE_PRIVATE_KEY')
+  }
+  const queueVars = ['REDIS_URL', 'REDIS_HOST', 'REDIS_PORT']
+  const queueMissing = queueVars.filter(k => !process.env[k])
+  if (missing.length > 0) {
+    console.error(JSON.stringify({ ts: new Date().toISOString(), error: 'MISSING_ENV_VARS', missing }))
+    try { process.exit(1) } catch (e) { /* best-effort */ }
+  }
+  if (queueMissing.length > 0) {
+    console.log(JSON.stringify({ ts: new Date().toISOString(), note: 'QUEUE_ENV_MISSING', missing: queueMissing }))
+  }
+}
+
+validateStartupEnv()
 const express = require('express')
 
 // Boot log for entry file identification
@@ -48,13 +86,19 @@ app.use((req, res, next) => {
 // (including the webhook) so preflight and normal requests get consistent
 // headers. Server-to-server (no Origin) requests are still allowed.
 
-// Lightweight health endpoints
+// Lightweight health endpoint that must NOT touch Firestore
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'ok' })
+  return res.status(200).json({ ok: true, ts: new Date().toISOString(), uptime: process.uptime(), pid: process.pid })
 })
 
+// API-level health and ping for routing verification
 app.get('/api/health', (req, res) => {
-  res.status(200).json({ status: 'ok' })
+  return res.status(200).json({ ok: true, ts: new Date().toISOString(), uptime: process.uptime(), pid: process.pid })
+})
+
+// Lightweight routing check
+app.get('/api/ping', (req, res) => {
+  return res.status(200).json({ ok: true, ts: new Date().toISOString(), message: 'pong' })
 })
 
 // Stripe + Firebase for webhook
@@ -80,26 +124,53 @@ if (stripeKey && stripeKey.startsWith("sk_")) {
 let admin = null
 let db = null
 let bucket = null
+let firebaseInitialized = false
 try {
   // services/firebaseAdmin will attempt to initialize admin only when valid creds are present
   admin = require('./services/firebaseAdmin')
-  try {
-    const bn = process.env.FIREBASE_STORAGE_BUCKET || 'autoeditor-d4940.appspot.com'
-    if (admin && typeof admin.getBucket === 'function') {
-      try { bucket = admin.getBucket(bn) } catch (e) { bucket = null }
+  if (admin && (admin._missingEnv || admin._missing)) {
+    console.warn('[startup] firebase admin exported stub; missing envs:', admin._missingEnv || admin._missing)
+    firebaseInitialized = false
+  } else {
+    try {
+      db = admin.db || (typeof admin.firestore === 'function' ? admin.firestore() : null)
+      firebaseInitialized = !!db
+    } catch (e) {
+      db = null
+      firebaseInitialized = false
+      console.warn('[startup] firebase initialization error (firestore)', e && (e.stack || e.message || e))
     }
-    if (!bucket && admin && admin.storage) {
-      try { bucket = admin.storage().bucket(bn) } catch (e) { bucket = null }
+    try {
+      const bn = process.env.FIREBASE_STORAGE_BUCKET || 'autoeditor-d4940.appspot.com'
+      if (admin && typeof admin.getBucket === 'function') {
+        try { bucket = admin.getBucket(bn) } catch (e) { bucket = null }
+      }
+      if (!bucket && admin && admin.storage) {
+        try { bucket = admin.storage().bucket(bn) } catch (e) { bucket = null }
+      }
+      if (!bucket) console.warn('[startup] Firebase storage bucket not available (will error on upload attempts)')
+    } catch (e) {
+      console.warn('[startup] failed to resolve storage bucket', e && (e.stack || e.message || e))
     }
-    if (!bucket) console.warn('[startup] Firebase storage bucket not available (will error on upload attempts)')
-  } catch (e) {
-    console.warn('[startup] failed to resolve storage bucket', e && (e.stack || e.message || e))
   }
-  if (!bucket) console.warn('[startup] Firebase storage bucket not available (will error on upload attempts)')
 } catch (e) {
-  console.warn('[startup] failed to load ./services/firebaseAdmin, falling back to firebase-admin stub', e && (e.stack || e.message || e))
+  console.warn('[startup] failed to load ./services/firebaseAdmin', e && (e.stack || e.message || e))
+  firebaseInitialized = false
   try { admin = require('firebase-admin') } catch (er) { admin = null }
 }
+
+console.log('[startup] firebaseInitialized=', !!firebaseInitialized)
+
+// API middleware: when firebase is not initialized, surface a clear JSON error
+app.use('/api', (req, res, next) => {
+  // Allow lightweight routing and health checks to work even when Firebase is down
+  const allowed = ['/ping', '/health', '/firebase-check']
+  if (!firebaseInitialized) {
+    for (const p of allowed) if (req.path && req.path.startsWith(p)) return next()
+    return res.status(500).json({ ok: false, error: 'firebase_not_initialized' })
+  }
+  return next()
+})
 
 // Helper: cleanly log Firestore / gRPC errors with structured JSON
 function logFirestoreError(err, context = {}) {
