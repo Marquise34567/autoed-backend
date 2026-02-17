@@ -167,27 +167,36 @@ async function processJob(jobId, inputSpec) {
 
     await updateJobPatch({ status: sanitizeStatus('processing'), phase: 'PROCESSING', progress: clampProgress(5), message: 'Processing started', startedAt: admin.firestore.FieldValue.serverTimestamp(), lockedAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() })
 
-    // Resolve input path from job document with fallbacks
-    // priority: job.bucketPath -> job.input?.storagePath -> job.storagePath -> job.inputPath
+    // Resolve input path from job document with fallbacks (prefer `inputPath`)
     let storagePath = null
     let bucketName = process.env.FIREBASE_STORAGE_BUCKET || DEFAULT_BUCKET_NAME || null
     let jobDoc = null
     try {
       const jobSnap = await db.collection('jobs').doc(jobId).get()
       jobDoc = jobSnap && jobSnap.exists ? jobSnap.data() : null
-      storagePath = jobDoc && (jobDoc.bucketPath || (jobDoc.input && jobDoc.input.storagePath) || jobDoc.storagePath || jobDoc.inputPath) ? (jobDoc.bucketPath || (jobDoc.input && jobDoc.input.storagePath) || jobDoc.storagePath || jobDoc.inputPath) : null
-      jlog('job_doc_input_resolution', { bucketPath: jobDoc && jobDoc.bucketPath || null, input_storagePath: jobDoc && jobDoc.input && jobDoc.input.storagePath || null, inputPath: jobDoc && jobDoc.inputPath || null })
+      storagePath = jobDoc && (jobDoc.inputPath || jobDoc.bucketPath || (jobDoc.input && jobDoc.input.storagePath) || jobDoc.storagePath) ? (jobDoc.inputPath || jobDoc.bucketPath || (jobDoc.input && jobDoc.input.storagePath) || jobDoc.storagePath) : null
+      jlog('job_doc_input_resolution', { inputPath: jobDoc && jobDoc.inputPath || null, bucketPath: jobDoc && jobDoc.bucketPath || null, input_storagePath: jobDoc && jobDoc.input && jobDoc.input.storagePath || null })
     } catch (e) {
       throw new Error('Failed to read job document: ' + (e && e.message))
     }
 
     if (!storagePath) {
-      throw new Error('Missing input path (bucketPath/input.storagePath/inputPath) in job document')
+      throw new Error('No input path on job')
     }
 
     // build canonical gsUri for logging/consumption and derive downloadURL
     const downloadURL = (jobDoc && jobDoc.input && jobDoc.input.downloadURL) || (jobDoc && jobDoc.downloadURL) || (inputSpec && inputSpec.downloadURL) || null
     const inputGsUri = (jobDoc && jobDoc.input && jobDoc.input.gsUri) || (bucketName && storagePath ? `gs://${bucketName}/${storagePath}` : null)
+
+    // Persist outputPath early so callers never see a null outputPath when signing
+    const uid = (jobDoc && (jobDoc.userId || jobDoc.uid)) || 'unknown'
+    const outputPath = `outputs/${uid}/${jobId}.mp4`
+    try {
+      await updateJobPatch({ outputPath })
+      jlog('persisted_outputPath', { outputPath })
+    } catch (e) {
+      console.warn('[worker] failed to persist outputPath early', e && (e.message || e))
+    }
 
     // Log normalized input source
     jlog('normalized_input', { bucketName, storagePath, inputGsUri })

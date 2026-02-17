@@ -339,8 +339,7 @@ router.post('/', async (req, res) => {
         progress: 0,
         createdAt: now,
         updatedAt: now,
-        // canonical input fields for worker
-        bucketPath: storagePath,
+        // canonical input field for worker
         inputPath: storagePath,
         input: inputSpec,
         // placeholders for outputs
