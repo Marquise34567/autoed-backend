@@ -1,12 +1,9 @@
 const express = require('express')
 const crypto = require('crypto')
 const router = express.Router()
-const fs = require('fs')
-const path = require('path')
-const { exec } = require('child_process')
+// note: heavy processing moved to worker; keep route lightweight
 const { admin, db } = require('../services/firebaseAdmin')
 const { getSignedUrlForPath, attachSignedUrlsToJob } = require('../utils/storageSignedUrl')
-const { processJob } = require('../services/worker/processJob')
 const { enqueue, reenqueue, listQueued } = require('../services/worker/queue')
 // db is defined above
 
@@ -16,130 +13,9 @@ function jlog(event, meta = {}) {
 }
 // (imports and db defined above)
 
-async function processVideo(jobId, inputSpec) {
-  console.log('Processing started:', jobId)
-  try {
-    // Mark processing started
-    await db.collection('jobs').doc(jobId).set({ status: 'processing', progress: 0, message: 'Processing started', updatedAt: Date.now() }, { merge: true })
-
-    const bucket = admin.getBucket()
-
-    // Determine input source
-    let downloadURL = null
-    let gsPath = null
-    if (typeof inputSpec === 'string') gsPath = inputSpec
-    else {
-      downloadURL = inputSpec.downloadURL || inputSpec.downloadUrl || null
-      gsPath = inputSpec.storagePath || inputSpec.gsUri || inputSpec.path || null
-    }
-
-    // Download to /tmp/uploads
-    const tmpDir = path.resolve(process.cwd(), 'tmp', 'uploads')
-    fs.mkdirSync(tmpDir, { recursive: true })
-    const tmpBase = (gsPath ? path.basename(gsPath) : `download-${jobId}.bin`).replace(/[^a-z0-9.\-_]/gi, '_')
-    const localIn = path.resolve(tmpDir, `${jobId}-${tmpBase}`)
-
-    if (downloadURL) {
-      console.log(`[jobs:${jobId}] Input source: downloadURL`)
-      await new Promise((resolve, reject) => {
-        try {
-          const u = new URL(downloadURL)
-          const lib = u.protocol === 'https:' ? require('https') : require('http')
-          const req = lib.get(u, (res) => {
-            if (!res.statusCode || res.statusCode >= 400) return reject(new Error(`Failed to fetch ${downloadURL}: status ${res.statusCode}`))
-            const fileStream = fs.createWriteStream(localIn)
-            res.pipe(fileStream)
-            fileStream.on('finish', () => resolve())
-            fileStream.on('error', reject)
-          })
-          req.on('error', reject)
-        } catch (err) {
-          return reject(err)
-        }
-      })
-      await db.collection('jobs').doc(jobId).set({ progress: 10, message: 'Downloaded input (from URL)', updatedAt: Date.now() }, { merge: true })
-    } else if (gsPath) {
-      console.log(`[jobs:${jobId}] Input source: gsUri`)
-      // Support gs://bucket/path or plain storage-relative path
-      let filePath = gsPath
-      if (gsPath.startsWith('gs://')) {
-        const without = gsPath.replace(/^gs:\/\//i, '')
-        const idx = without.indexOf('/')
-        if (idx > 0) {
-          const bucketName = without.slice(0, idx)
-          filePath = without.slice(idx + 1)
-          const otherBucket = admin.storage().bucket(bucketName)
-          const remoteFile = otherBucket.file(filePath)
-          const [exists] = await remoteFile.exists()
-            if (!exists) {
-            console.error(`[jobs:${jobId}] Source file not found: ${gsPath}`)
-            await db.collection('jobs').doc(jobId).set({ status: 'failed', progress: 0, message: 'Source file not found', errorMessage: 'Source file missing', updatedAt: Date.now() }, { merge: true })
-            return
-          }
-          await remoteFile.download({ destination: localIn })
-        } else {
-          console.error(`[jobs:${jobId}] Invalid gs:// URI: ${gsPath}`)
-          await db.collection('jobs').doc(jobId).set({ status: 'failed', progress: 0, message: 'Invalid gsUri', errorMessage: 'Invalid gsUri', updatedAt: Date.now() }, { merge: true })
-          return
-        }
-      } else {
-        const remoteFile = bucket.file(filePath)
-        const [exists] = await remoteFile.exists()
-        if (!exists) {
-          console.error(`[jobs:${jobId}] Source file not found: ${filePath}`)
-          await db.collection('jobs').doc(jobId).set({ status: 'failed', progress: 0, message: 'Source file not found', errorMessage: 'Source file missing', updatedAt: Date.now() }, { merge: true })
-          return
-        }
-        await remoteFile.download({ destination: localIn })
-      }
-      await db.collection('jobs').doc(jobId).set({ progress: 10, message: 'Downloaded input', updatedAt: Date.now() }, { merge: true })
-    } else {
-      console.error(`[jobs:${jobId}] No input source provided`)
-      await db.collection('jobs').doc(jobId).set({ status: 'failed', progress: 0, message: 'No input source', errorMessage: 'Missing input', updatedAt: Date.now() }, { merge: true })
-      return
-    }
-
-    // Run ffmpeg
-    const tmpOutDir = path.resolve(process.cwd(), 'tmp', 'renders')
-    fs.mkdirSync(tmpOutDir, { recursive: true })
-    const localOut = path.resolve(tmpOutDir, `${jobId}-final.mp4`)
-    const ffmpegCmd = `ffmpeg -y -i "${localIn}" -c:v libx264 -preset veryfast -crf 23 -c:a aac -movflags +faststart "${localOut}"`
-    console.log(`[jobs:${jobId}] Running FFmpeg: ${ffmpegCmd}`)
-    await new Promise((resolve, reject) => {
-      const proc = exec(ffmpegCmd, { maxBuffer: 1024 * 1024 * 50 }, (error, stdout, stderr) => {
-        if (error) return reject(error)
-        return resolve({ stdout, stderr })
-      })
-      if (proc.stdout && proc.stdout.on) proc.stdout.on('data', (d) => console.log(`[jobs:${jobId}] ffmpeg: ${String(d).trim()}`))
-      if (proc.stderr && proc.stderr.on) proc.stderr.on('data', (d) => console.log(`[jobs:${jobId}] ffmpeg: ${String(d).trim()}`))
-    })
-    console.log('FFmpeg finished')
-    await db.collection('jobs').doc(jobId).set({ progress: 70, message: 'FFmpeg finished', updatedAt: Date.now() }, { merge: true })
-
-    // Upload result
-    const finalPath = `outputs/${jobId}/final.mp4`
-    console.log(`[jobs:${jobId}] Uploading result to ${finalPath}`)
-    await bucket.upload(localOut, { destination: finalPath })
-    console.log('Upload finished')
-    // Generate a time-limited signed URL for clients instead of a public URL
-    let resultUrl = null
-    try {
-      resultUrl = await getSignedUrlForPath(finalPath, 30)
-    } catch (e) {
-      // fall back to storing path if signed URL generation fails
-      resultUrl = null
-    }
-    await db.collection('jobs').doc(jobId).set({ status: 'completed', progress: 100, resultUrl, finalVideoPath: finalPath, message: 'Completed', updatedAt: Date.now() }, { merge: true })
-    console.log(`Processing completed: ${jobId} resultPath=${finalPath}`)
-
-    // cleanup
-    try { fs.unlinkSync(localIn) } catch (e) {}
-    try { fs.unlinkSync(localOut) } catch (e) {}
-    } catch (err) {
-    console.error(`[jobs:${jobId}] processing error:`, err && (err.stack || err.message || err))
-    try { await db.collection('jobs').doc(jobId).set({ status: 'failed', progress: 0, errorMessage: err && (err.message || String(err)), updatedAt: Date.now() }, { merge: true }) } catch (e) { console.error('[jobs] failed to write error state to Firestore', e) }
-  }
-}
+// The heavy processing implementation used to live here; all processing
+// now runs in the worker (`services/worker/processJob.js`). Keeping this file
+// lightweight prevents accidental blocking of the HTTP request lifecycle.
 
 function normalizeJobRecord(raw) {
   if (!raw) return null
@@ -337,24 +213,25 @@ router.post('/:id/retry', async (req, res) => {
 router.post('/', async (req, res) => {
   try {
     jlog('job_post_incoming')
+
+    // Basic user validation: require an Authorization header or explicit userId in body
+    const body = req.body || {}
+    const authHeader = req.headers && req.headers.authorization
+    const userId = body.userId || (authHeader ? String(authHeader).slice(0, 256) : null)
+    if (!userId) return res.status(401).json({ ok: false, error: 'missing_user' })
+
     if (!db || !admin) {
       console.error('[jobs] firebaseAdmin missing', { hasDb: !!db, hasAdmin: !!admin })
       return res.status(500).json({ ok: false, error: 'firebase_admin_missing' })
     }
-    // Log whether an Authorization header was provided (do not log token contents)
-    try { console.log('[jobs] Authorization present:', !!req.headers && !!req.headers.authorization) } catch (e) {}
-    const body = req.body || {}
-    const { storagePath, gsUri, downloadURL, filename, contentType } = body
-    const smartZoom = body.smartZoom || null
 
-    // REQUIRE storagePath to match frontend behavior
-    if (!storagePath) {
-      return res.status(400).json({ ok: false, error: 'Missing required field: storagePath' })
-    }
+    const { storagePath, gsUri, downloadURL, filename, contentType } = body
+
+    if (!storagePath) return res.status(400).json({ ok: false, error: 'Missing required field: storagePath' })
 
     const jobId = (crypto.randomUUID && crypto.randomUUID()) || `${Date.now()}-${Math.floor(Math.random() * 100000)}`
 
-    // Build canonical gsUri when possible (use configured storage bucket)
+    // Build canonical gsUri when possible
     const bucketName = process.env.FIREBASE_STORAGE_BUCKET ? String(process.env.FIREBASE_STORAGE_BUCKET).replace(/^gs:\/\//i, '').trim() : null
     const computedGs = gsUri || (storagePath && bucketName ? `gs://${bucketName}/${storagePath}` : null) || null
 
@@ -362,55 +239,37 @@ router.post('/', async (req, res) => {
     if (computedGs) inputSpec.gsUri = computedGs
     if (downloadURL) inputSpec.downloadURL = downloadURL
 
-    // Persist job to Firestore using standardized schema
-    if (!db) return res.status(500).json({ ok: false, error: 'Firestore not configured' })
+    // Persist queued job document and return immediately (no heavy work)
     try {
       const now = admin.firestore.FieldValue.serverTimestamp()
       await db.collection('jobs').doc(jobId).set({
         id: jobId,
-        uid: null,
+        userId: userId,
         status: 'queued',
         progress: 0,
-        resultUrl: null,
-        finalVideoPath: null,
-        error: null,
         createdAt: now,
         updatedAt: now,
+        inputPath: storagePath,
         input: inputSpec,
-        filename: filename || null,
-        contentType: contentType || null,
-          lockedAt: null,
-          workerId: null,
-        }, { merge: true })
+      }, { merge: true })
     } catch (err) {
-      console.error('JOB_PERSIST_ERROR', err && (err.stack || err.message || err))
-      return res.status(500).json({
-        ok: false,
-        error: 'Failed to persist job',
-        message: err && err.message ? err.message : String(err),
-        stack: err && err.stack ? err.stack : null,
-      })
+      console.error('[jobs] JOB_PERSIST_ERROR', err && (err.stack || err.message || err))
+      return res.status(500).json({ ok: false, error: 'job create failed' })
     }
 
-    // Attach to in-memory jobs map for local visibility and enqueue
-    const job = makeJob({ id: jobId, path: computedGs || storagePath, filename, contentType })
-    job.inputSpec = inputSpec
-    jobs.set(jobId, job)
-
-    jlog('job_created', { jobId, status: 'queued', storagePath, downloadURL, filename, contentType, smartZoom })
-
+    // Enqueue for worker (non-blocking). Use existing enqueue; it's synchronous so await a resolved promise.
     try {
       enqueue(jobId, inputSpec)
-      console.log(`[jobs] enqueued ${jobId}`)
     } catch (e) {
-      console.error('[jobs] failed to enqueue', e && (e.message || e))
+      console.error('[jobs] enqueue failed', e && (e.stack || e.message || e))
+      // Even if enqueue fails, return error so caller can retry
+      return res.status(500).json({ ok: false, error: 'enqueue_failed' })
     }
 
-    // Return consistent API contract to frontend
-    return res.status(201).json({ ok: true, jobId })
+    return res.status(200).json({ ok: true, jobId })
   } catch (err) {
     console.error('[jobs] POST error', err && (err.stack || err.message || err))
-    return res.status(500).json({ ok: false, errorMessage: 'Internal server error' })
+    return res.status(500).json({ error: 'job create failed' })
   }
 })
 

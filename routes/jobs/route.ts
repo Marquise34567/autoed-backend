@@ -1,13 +1,6 @@
 import { NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { createJob, updateJob, appendJobLog } from "@/lib/jobs";
-import { processVideo } from '@/services/jobsProcessor'
-import path from "path";
-import fs from "fs";
-import { getBucket } from "@/lib/firebaseAdmin";
-import normalizeToMp4 from "@/lib/ffmpeg/normalize";
-import { probeDurationSec, detectSilenceSegments, selectBoringCuts, analyzeVideo } from '@/lib/videoAnalysis';
-import { renderEditedVideo } from '@/lib/ffmpeg/renderEdited';
 
 export const runtime = "nodejs";
 
@@ -48,16 +41,27 @@ export async function POST(request: Request) {
       logs: [`Created job for ${storagePath}`],
     } as any);
 
-    // Start async pipeline in background; return jobId immediately so client can poll
+    // Log request start
+    console.log('[jobs.POST] incoming', { jobId, storagePath })
+
+    // Enqueue job for worker processing (do not process inline)
     try {
-      processVideo(jobId, { storagePath, gsUri, downloadURL }).catch((e) => {
-        console.error(`[jobs:${jobId}] processVideo uncaught error:`, e)
-        appendJobLog(jobId, `processVideo uncaught error: ${e?.message || String(e)}`)
-      })
+      // dynamic import to interop with JS-based queue module
+      const qmod = await import('../../../../services/worker/queue')
+      const enqueue = qmod.enqueue || (qmod.default && qmod.default.enqueue)
+      if (typeof enqueue === 'function') {
+        enqueue(jobId, { storagePath, gsUri, downloadURL })
+      } else {
+        console.warn('[jobs.POST] enqueue not available; job persisted and worker should pick it up')
+      }
     } catch (e) {
-      console.error(`[jobs:${jobId}] Failed to start processVideo:`, e)
-      appendJobLog(jobId, `Failed to start processVideo: ${e?.message || String(e)}`)
+      console.error('[jobs.POST] failed to enqueue', e)
+      appendJobLog(jobId, `Failed to enqueue: ${e?.message || String(e)}`)
+      // still return success because job is persisted
     }
+
+    // Log just before responding to confirm non-blocking
+    console.log('[jobs.POST] responding', { jobId })
 
     return NextResponse.json({ jobId: job.id })
   } catch (err: any) {
