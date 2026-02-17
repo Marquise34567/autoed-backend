@@ -371,6 +371,9 @@ router.post('/', async (req, res) => {
         uid: null,
         status: 'queued',
         progress: 0,
+        resultUrl: null,
+        finalVideoPath: null,
+        error: null,
         createdAt: now,
         updatedAt: now,
         input: inputSpec,
@@ -378,8 +381,7 @@ router.post('/', async (req, res) => {
         contentType: contentType || null,
         lockedAt: null,
         workerId: null,
-        error: null,
-      }, { merge: true })
+      }, { merge: false })
     } catch (err) {
       console.error('JOB_PERSIST_ERROR', err && (err.stack || err.message || err))
       return res.status(500).json({
