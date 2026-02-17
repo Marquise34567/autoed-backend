@@ -167,18 +167,45 @@ async function processJob(jobId, inputSpec) {
 
     await updateJobPatch({ status: sanitizeStatus('processing'), phase: 'PROCESSING', progress: clampProgress(5), message: 'Processing started', startedAt: admin.firestore.FieldValue.serverTimestamp(), lockedAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() })
 
-    // Normalize inputSpec
+    // Normalize inputSpec into a consistent inputSource
     let downloadURL = null
     let gsUri = null
     let storagePath = null
+    let bucketName = null
+
+    // inputSpec may be the whole job doc or an inputSpec object
+    jlog('input_fields', { inputSpecKeys: inputSpec && typeof inputSpec === 'object' ? Object.keys(inputSpec) : null })
     if (typeof inputSpec === 'string') {
+      // treat as gsUri
       gsUri = inputSpec
     } else if (inputSpec && typeof inputSpec === 'object') {
-      // prefer downloadURL first, then storagePath/gsUri
-      downloadURL = inputSpec.downloadURL || inputSpec.downloadUrl || null
-      storagePath = inputSpec.storagePath || null
-      gsUri = inputSpec.gsUri || null
+      // accept nested `input` object or top-level fields
+      const inObj = inputSpec.input && typeof inputSpec.input === 'object' ? inputSpec.input : inputSpec
+      downloadURL = inObj.downloadURL || inObj.downloadUrl || inObj.download || inputSpec.downloadURL || inputSpec.downloadUrl || null
+      storagePath = inObj.storagePath || inObj.storage_path || inputSpec.storagePath || inputSpec.storage_path || null
+      gsUri = inObj.gsUri || inObj.gs_uri || inputSpec.gsUri || inputSpec.gs_uri || null
+      bucketName = inObj.bucket || inObj.storageBucket || inObj.bucketName || inputSpec.bucket || inputSpec.storageBucket || null
     }
+
+    // If gsUri provided but storagePath missing, attempt to parse storagePath and bucket
+    if (gsUri && (!storagePath || storagePath === '')) {
+      if (gsUri.startsWith && gsUri.startsWith('gs://')) {
+        const without = gsUri.replace(/^gs:\/\//i, '')
+        const idx = without.indexOf('/')
+        if (idx > 0) {
+          const parsedBucket = without.slice(0, idx)
+          const parsedPath = without.slice(idx + 1)
+          if (!bucketName) bucketName = parsedBucket
+          if (!storagePath) storagePath = parsedPath
+        }
+      }
+    }
+
+    // Fallback bucket: env or default
+    if (!bucketName) bucketName = process.env.FIREBASE_STORAGE_BUCKET || DEFAULT_BUCKET_NAME || null
+
+    // Log normalized input source
+    jlog('normalized_input', { bucketName, storagePath, gsUri, downloadURL })
 
     // Prepare tmp
     const tmpDir = path.resolve(os.tmpdir(), 'autoed', 'uploads')
@@ -194,13 +221,12 @@ async function processJob(jobId, inputSpec) {
     // 1) storagePath (preferred)
     if (storagePath) {
       try {
-        const bucketName = DEFAULT_BUCKET_NAME
         console.log(`[worker] ${jobId} downloading using storagePath=${storagePath} bucket=${bucketName}`)
-        await updateJobPatch({ progress: 5, message: 'Downloading from storagePath', updatedAt: admin.firestore.FieldValue.serverTimestamp() })
+        await updateJobPatch({ progress: 2, phase: 'DOWNLOADING', message: 'Downloading from storagePath', updatedAt: admin.firestore.FieldValue.serverTimestamp() })
         const bucketObj = getBucketObject(bucketName)
         const remoteFile = bucketObj.file(storagePath)
         const [exists] = await remoteFile.exists()
-        if (!exists) throw new Error(`Source file not found: ${storagePath}`)
+        if (!exists) throw new Error(`Source file not found in bucket: ${bucketName}/${storagePath}`)
         await new Promise((resolve, reject) => {
           const rs = remoteFile.createReadStream()
           rs.on('error', (err) => reject(err))
@@ -210,10 +236,11 @@ async function processJob(jobId, inputSpec) {
           rs.pipe(ws)
         })
         jlog('download_complete', { localIn })
-        await updateJobPatch({ progress: 20, message: 'Downloaded from storagePath', updatedAt: admin.firestore.FieldValue.serverTimestamp() })
+        await updateJobPatch({ progress: 20, phase: 'DOWNLOADING', message: 'Downloaded from storagePath', updatedAt: admin.firestore.FieldValue.serverTimestamp() })
         downloaded = true
       } catch (e) {
         console.warn(`[worker] ${jobId} storagePath download failed, will try gsUri/downloadURL:`, e && (e.message || e))
+        await updateJobPatch({ errorDebug: `storagePath download failed: ${e && (e.message || e)}` })
       }
     }
 
@@ -250,7 +277,9 @@ async function processJob(jobId, inputSpec) {
     }
 
     if (!downloaded) {
-      throw new Error('No input source provided or download failed')
+      // Provide clear diagnostics on why download failed
+      const present = { storagePath: !!storagePath, gsUri: !!gsUri, downloadURL: !!downloadURL, bucketName: !!bucketName }
+      throw new Error('No input source provided or download failed. Present fields: ' + JSON.stringify(present))
     }
 
       jlog('stage_download_start')

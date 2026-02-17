@@ -564,6 +564,7 @@ app.use('/api/health', require('./routes/health'))
 app.use('/api/ping', require('./routes/ping'))
 // Debug endpoints for verifying integrations (e.g., Firestore)
 try { app.use('/api/debug', require('./routes/debug/firestore')) } catch (e) { console.warn('[routes] failed to mount /api/debug', e && e.message ? e.message : e) }
+try { app.use('/api/debug/storage', require('./routes/debug/storage')) } catch (e) { console.warn('[routes] failed to mount /api/debug/storage', e && e.message ? e.message : e) }
 app.use("/api/jobs", require("./routes/jobs"))
 // Also mount non-/api path for backward compatibility (frontend may call /jobs)
 app.use("/jobs", require("./routes/jobs"))
