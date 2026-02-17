@@ -4,12 +4,12 @@ const { processJob } = require('./processJob')
 const fs = require('fs')
 const path = require('path')
 const { listQueued } = require('./queue')
+const { getSignedUrlForPath } = require('../../utils/storageSignedUrl')
 
 // `db` provided by services/firebaseAdmin
 
 if (!db) {
-  console.error('Firestore db is undefined')
-  process.exit(1)
+  console.warn('[worker] Firestore db is undefined; worker will not start until db is available')
 }
 
 const os = require('os')
@@ -17,7 +17,8 @@ const POLL_MS = parseInt(process.env.WORKER_POLL_MS || '2000', 10)
 const CONCURRENCY = parseInt(process.env.WORKER_CONCURRENCY || '2', 10)
 function envTrue(v) { return ["1", "true", "yes", "y", "on"].includes(String(v || "").toLowerCase()) }
 const isProd = process.env.NODE_ENV === 'production'
-const WORKER_ENABLED = process.env.WORKER_ENABLED == null ? !isProd : envTrue(process.env.WORKER_ENABLED)
+// Align worker enablement with index.js: only enable when WORKER_ENABLED==='true'
+const WORKER_ENABLED = String(process.env.WORKER_ENABLED) === 'true'
 const PROCESSING_TIMEOUT_MS = parseInt(process.env.JOB_PROCESSING_TIMEOUT_MS || String(30 * 60 * 1000), 10)
 
 let started = false
@@ -45,6 +46,11 @@ async function claimOne() {
   log(null, "scan: querying jobs where status=='queued' (with uppercase fallback)")
   // Watchdog: find stuck processing jobs older than threshold and mark failed
   try {
+      function sanitizeStatus(s) {
+        const allowed = ['queued', 'processing', 'completed', 'failed']
+        const v = (s || '').toString().toLowerCase()
+        return allowed.includes(v) ? v : null
+      }
     if (PROCESSING_TIMEOUT_MS > 0) {
       const cutoff = admin.firestore.Timestamp.fromMillis(Date.now() - PROCESSING_TIMEOUT_MS)
       const stale = await db.collection('jobs').where('status', '==', 'processing').where('lockedAt', '<', cutoff).limit(10).get()
@@ -86,7 +92,7 @@ async function claimOne() {
           try { lockedMillis = data.lockedAt.toMillis ? data.lockedAt.toMillis() : (new Date(data.lockedAt)).getTime() } catch (e) { lockedMillis = 0 }
           if (lockedMillis && (nowMs - lockedMillis) < LOCK_AGE_MS) return null
         }
-        tx.update(ref, { status: 'processing', progress: 0, lockedAt: admin.firestore.FieldValue.serverTimestamp(), workerId, updatedAt: admin.firestore.FieldValue.serverTimestamp() })
+        tx.update(ref, { status: sanitizeStatus('processing'), progress: 5, lockedAt: admin.firestore.FieldValue.serverTimestamp(), workerId, updatedAt: admin.firestore.FieldValue.serverTimestamp() })
         return { id: ref.id, data }
       })
       if (claimed) log(claimed.id, 'claimed job', claimed.id, 'by', workerId, 'oldStatus=', claimed.data && claimed.data.status)
@@ -136,8 +142,8 @@ async function workerLoop() {
       // Immediately mark progress to ensure frontend sees work started
       try {
         await db.collection('jobs').doc(jobId).update({
-          progress: 10,
-          status: 'processing',
+          progress: 5,
+          status: sanitizeStatus('processing'),
           updatedAt: admin.firestore.FieldValue.serverTimestamp()
         })
       } catch (e) {
@@ -151,19 +157,59 @@ async function workerLoop() {
           const result = await processJob(jobId, inputSpec)
           log(jobId, 'processing finished', result)
           try {
-            await db.collection('jobs').doc(jobId).update({
-              progress: 100,
-              status: 'completed',
-              resultUrl: (result && result.resultUrl) || null,
-              finalVideoPath: (result && result.finalVideoPath) || null,
-              updatedAt: admin.firestore.FieldValue.serverTimestamp()
-            })
+            const finalPath = (result && result.finalVideoPath) || null
+            let signedUrl = (result && result.resultUrl) || null
+
+            if (finalPath && !signedUrl) {
+              try {
+                signedUrl = await getSignedUrlForPath(finalPath, 60)
+              } catch (errUrl) {
+                log(jobId, 'failed to generate signed URL for finalVideoPath', errUrl && (errUrl.message || errUrl))
+                signedUrl = null
+              }
+            }
+
+            let gsPath = null
+            try {
+              const bucketName = (admin && typeof admin.getBucketName === 'function') ? admin.getBucketName() : (process.env.FIREBASE_STORAGE_BUCKET || null)
+              if (finalPath) {
+                gsPath = finalPath.startsWith('gs://') ? finalPath : (bucketName ? `gs://${bucketName}/${finalPath.replace(/^\/+/, '')}` : finalPath)
+              }
+            } catch (e) { gsPath = finalPath }
+
+            if (!signedUrl) {
+              try {
+                await db.collection('jobs').doc(jobId).update({
+                  status: sanitizeStatus('failed') || 'failed',
+                  progress: 0,
+                  errorMessage: 'Failed to generate signed download URL for output',
+                  updatedAt: admin.firestore.FieldValue.serverTimestamp()
+                })
+                console.error(`[worker] ${jobId} -> failed to write resultUrl; marked failed`)
+              } catch (er) {
+                log(jobId, 'failed to write failure state after missing signed URL', er)
+              }
+            } else {
+              try {
+                await db.collection('jobs').doc(jobId).update({
+                  progress: 100,
+                  status: sanitizeStatus('completed'),
+                  resultUrl: signedUrl,
+                  finalVideoPath: gsPath || finalPath,
+                  updatedAt: admin.firestore.FieldValue.serverTimestamp()
+                })
+                console.log(`[worker] uploaded: ${gsPath || finalPath}`)
+                console.log(`[worker] resultUrl: ${signedUrl}`)
+              } catch (er) {
+                log(jobId, 'failed to mark completed after signed URL generation', er)
+              }
+            }
           } catch (er) { log(jobId, 'failed to mark completed', er) }
         } catch (e) {
           log(jobId, 'processing error', e && (e.stack || e.message || e))
           try {
             await db.collection('jobs').doc(jobId).update({
-              status: 'failed',
+              status: sanitizeStatus('failed'),
               progress: 0,
               error: e && (e.message || String(e)),
               updatedAt: admin.firestore.FieldValue.serverTimestamp()
@@ -188,8 +234,8 @@ async function workerLoop() {
 function start() {
   if (!WORKER_ENABLED) return log(null, 'WORKER_ENABLED not true; skipping start')
   if (!db) {
-    console.error('[worker] db missing')
-    process.exit(1)
+    console.error('[worker] db missing; aborting worker start (will not crash process)')
+    return
   }
   // check ffmpeg availability
   try {
