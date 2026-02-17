@@ -39,10 +39,10 @@ function normalizeJobRecord(raw) {
 function parseGsUri(gsUri) {
   if (!gsUri || typeof gsUri !== 'string') return null
   if (!gsUri.startsWith('gs://')) return null
-  const noPrefix = gsUri.slice('gs://'.length)
-  const firstSlash = noPrefix.indexOf('/')
-  if (firstSlash === -1) return { bucket: noPrefix, path: '' }
-  return { bucket: noPrefix.slice(0, firstSlash), path: noPrefix.slice(firstSlash + 1) }
+  const rest = gsUri.slice('gs://'.length)
+  const i = rest.indexOf('/')
+  if (i === -1) return null
+  return { bucket: rest.slice(0, i), path: rest.slice(i + 1) }
 }
 
 // In-memory job store for now

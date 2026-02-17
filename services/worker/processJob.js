@@ -725,6 +725,15 @@ async function processJob(jobId, inputSpec) {
     try {
       if (fs.existsSync(localOut)) {
         const bucketObj = getBucketObject()
+        // determine concrete bucket name to use for upload
+        const outBucketName = (bucketObj && bucketObj.name) ? bucketObj.name : (process.env.FIREBASE_STORAGE_BUCKET ? String(process.env.FIREBASE_STORAGE_BUCKET).replace(/^gs:\/\//i, '').trim() : DEFAULT_BUCKET_NAME)
+        // persist proposed output location before the potentially-long upload so downstream routes can find it
+        try {
+          await db.collection('jobs').doc(jobId).set({ outputPath: outputPath, outputBucket: outBucketName, outputGsUri: `gs://${outBucketName}/${outputPath}` }, { merge: true })
+          jlog('persisted_output_refs_preupload', { outputPath, outputBucket: outBucketName })
+        } catch (ee) {
+          console.warn('[worker] failed to persist pre-upload output refs to job doc', ee && (ee.message || ee))
+        }
         jlog('upload_output_start', { dest: outputPath })
         console.log(`[worker] uploading output ${localOut} -> ${outputPath}`)
         await bucketObj.upload(localOut, { destination: outputPath, metadata: { contentType: 'video/mp4' } })
