@@ -48,3 +48,7 @@ Railway env vars to set before redeploy
 - `FIREBASE_STORAGE_BUCKET` — the bucket name (e.g., `autoeditor-d4940.firebasestorage.app` or `autoeditor-d4940.firebasestorage.app/path`); the script will normalize to the bucket name.
 
 After setting these, redeploy the app so the running instance has access to the credentials and storage bucket.
+
+Worker configuration:
+
+- `WORKER_ENABLED`: set to `true` to run the background worker. Defaults to `true` in non-production and `false` in production unless explicitly set.

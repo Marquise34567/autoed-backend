@@ -182,6 +182,16 @@ app.get('/api/debug/firebase-info', (req, res) => {
   }
 })
 
+// Worker status endpoint (non-sensitive)
+app.get('/api/worker/status', (req, res) => {
+  try {
+    if (!worker || typeof worker.getStatus !== 'function') return res.status(503).json({ ok: false, error: 'worker not available' })
+    return res.json({ ok: true, status: worker.getStatus() })
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: e && e.message })
+  }
+})
+
 // Debug endpoint to surface Firestore errors clearly
 app.get('/api/debug/firestore', wrapAsync(async (req, res) => {
   try {
@@ -655,32 +665,62 @@ console.log('✅ Routes ready: /api/health, /api/jobs')
 
 // Bind to the PORT environment variable (Railway sets this) or fallback for local dev
 const PORT = process.env.PORT || 8080
-app.listen(PORT, '0.0.0.0', () => {
+const server = app.listen(PORT, '0.0.0.0', () => {
   console.log('✅ Listening on', PORT)
   logRegisteredRoutes()
+  console.log('[server] started; PID=', process.pid)
+
   try {
-    if (worker && typeof worker.start === 'function') {
-      worker.start()
-      console.log('[worker] start invoked from index.js')
+    const workerEnabled = String(process.env.WORKER_ENABLED) === 'true'
+    console.log('[worker] WORKER_ENABLED=', process.env.WORKER_ENABLED, '-> start?', workerEnabled)
+    if (workerEnabled) {
+      if (worker && typeof worker.start === 'function') {
+        worker.start()
+        console.log('[worker] worker.start() invoked from index.js')
+      } else {
+        console.log('[worker] worker module missing start()')
+      }
+    } else {
+      console.log('[worker] WORKER_ENABLED not true; skipping start')
     }
   } catch (e) {
     console.error('[startup] failed to start worker', e && (e.stack || e.message || e))
   }
 })
-// Start worker loop if enabled via env
-try {
-  const workerEnabled = String(process.env.WORKER_ENABLED || 'false').toLowerCase() === 'true'
-  if (workerEnabled) {
-    try {
-      const worker = require('./services/worker/worker')
-      worker.start()
-      console.log('[worker] worker.start() invoked')
-    } catch (e) {
-      console.warn('[worker] failed to start worker', e && e.message ? e.message : e)
+
+// Server heartbeat to prove process is alive
+const serverHeartbeat = setInterval(() => console.log('[server] alive; listening on', PORT, 'PID=', process.pid), 30000)
+
+// Graceful shutdown: stop accepting new connections, tell worker to stop, wait up to 30s
+let shuttingDown = false
+async function gracefulShutdown(signal) {
+  if (shuttingDown) return
+  shuttingDown = true
+  console.log('[shutdown] signal=', signal, 'initiating graceful shutdown')
+  clearInterval(serverHeartbeat)
+  // Stop worker if present
+  try {
+    if (worker && typeof worker.stop === 'function') {
+      console.log('[shutdown] stopping worker loop')
+      await Promise.race([worker.stop(), new Promise(r => setTimeout(r, 30000))])
+      console.log('[shutdown] worker stop wait complete')
     }
-  } else {
-    console.log('[worker] WORKER_ENABLED not true; worker not started')
+  } catch (e) {
+    console.warn('[shutdown] error stopping worker', e && e.message)
   }
-} catch (e) {
-  console.warn('[worker] worker startup check failed', e && e.message ? e.message : e)
+
+  // Close server
+  try {
+    await new Promise((resolve) => server.close(() => resolve()))
+    console.log('[shutdown] HTTP server closed')
+  } catch (e) {
+    console.warn('[shutdown] server.close error', e && e.message)
+  }
+
+  console.log('[shutdown] complete; exiting')
+  try { process.exit(0) } catch (e) { /* best-effort */ }
 }
+
+process.on('SIGINT', () => gracefulShutdown('SIGINT'))
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'))
+// (worker start handled above in app.listen to avoid double-starts)

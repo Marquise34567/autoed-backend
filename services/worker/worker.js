@@ -10,8 +10,15 @@ const { listQueued } = require('./queue')
 const os = require('os')
 const POLL_MS = parseInt(process.env.WORKER_POLL_MS || '2000', 10)
 const CONCURRENCY = parseInt(process.env.WORKER_CONCURRENCY || '2', 10)
-const WORKER_ENABLED = String(process.env.WORKER_ENABLED || 'false').toLowerCase() === 'true'
+function envTrue(v) { return ["1", "true", "yes", "y", "on"].includes(String(v || "").toLowerCase()) }
+const isProd = process.env.NODE_ENV === 'production'
+const WORKER_ENABLED = process.env.WORKER_ENABLED == null ? !isProd : envTrue(process.env.WORKER_ENABLED)
 const PROCESSING_TIMEOUT_MS = parseInt(process.env.JOB_PROCESSING_TIMEOUT_MS || String(30 * 60 * 1000), 10)
+
+let started = false
+let stopping = false
+const GRACEFUL_SHUTDOWN_MS = parseInt(process.env.WORKER_GRACEFUL_SHUTDOWN_MS || String(30 * 1000), 10)
+let keepaliveTimer = null
 
 let running = false
 let heartbeatTimer = null
@@ -23,7 +30,7 @@ function log(jobId, ...args) {
   else console.log('[worker]', ...args)
 }
 
-console.log('[worker] WORKER_ENABLED:', process.env.WORKER_ENABLED)
+console.log('[worker] enabled =', WORKER_ENABLED, 'NODE_ENV =', process.env.NODE_ENV)
 
 async function claimOne() {
   if (!db) return null
@@ -92,21 +99,25 @@ async function workerLoop() {
   if (!WORKER_ENABLED) return log(null, 'worker disabled by env')
   if (running) return
   running = true
+  stopping = false
   log(null, `started; poll_ms=${POLL_MS} concurrency=${CONCURRENCY}`)
 
   // heartbeat
-  heartbeatTimer = setInterval(() => log(null, 'alive; queue scan...'), 30000)
+  heartbeatTimer = setInterval(() => log(null, `alive; inFlight=${activeJobs.size}; queueScan...`), 30000)
+  // ensure Node stays alive even if other handles close
+  keepaliveTimer = setInterval(() => {}, 60 * 60 * 1000)
 
-  while (running) {
+  while (running && !stopping) {
     try {
       // Enforce concurrency limit
       if (activeJobs.size >= CONCURRENCY) {
         await new Promise(r => setTimeout(r, POLL_MS))
         continue
       }
+      // try to claim a single job; loop respects concurrency
       const claimed = await claimOne()
       if (!claimed) {
-        // sleep
+        // sleep when no jobs
         await new Promise(r => setTimeout(r, POLL_MS))
         continue
       }
@@ -138,6 +149,7 @@ async function workerLoop() {
   }
 
   if (heartbeatTimer) clearInterval(heartbeatTimer)
+  if (keepaliveTimer) clearInterval(keepaliveTimer)
   log(null, 'stopped')
 }
 
