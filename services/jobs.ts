@@ -262,6 +262,25 @@ function sanitizeJobPatch(patch: Partial<JobRecord>) {
     next.finalVideoPath = (next as any).objectPathOutput
   }
   if ('objectPathOutput' in (next as any)) delete (next as any).objectPathOutput
+  // Normalize progress: convert fractions (0..1) to 0..100 and clamp
+  if (typeof next.progress !== 'undefined') {
+    let p = Number((next as any).progress)
+    if (Number.isFinite(p)) {
+      // if fraction between 0 and 1, scale
+      if (p > 0 && p <= 1) p = Math.round(p * 100)
+      if (p < 0) p = 0
+      if (p > 100) p = 100
+      (next as any).progress = Math.round(p)
+    } else {
+      delete (next as any).progress
+    }
+  }
+
+  // Normalize error fields: prefer `errorMessage` as canonical field
+  if ((next as any).error && !(next as any).errorMessage) {
+    (next as any).errorMessage = String((next as any).error)
+    delete (next as any).error
+  }
 
   return next
 }

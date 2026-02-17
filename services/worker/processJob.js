@@ -148,7 +148,24 @@ async function processJob(jobId, inputSpec) {
       return allowed.includes(v) ? v : null
     }
 
-    await db.collection('jobs').doc(jobId).set({ status: sanitizeStatus('processing'), progress: 5, message: 'Processing started', startedAt: admin.firestore.FieldValue.serverTimestamp(), lockedAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true })
+    function clampProgress(v) {
+      let p = Number(v) || 0
+      if (Number.isFinite(p)) {
+        if (p > 0 && p <= 1) p = Math.round(p * 100)
+        if (p < 0) p = 0
+        if (p > 100) p = 100
+        return Math.round(p)
+      }
+      return 0
+    }
+
+    async function updateJobPatch(patch) {
+      const p = { ...patch }
+      if (typeof p.progress !== 'undefined') p.progress = clampProgress(p.progress)
+      try { await db.collection('jobs').doc(jobId).set(p, { merge: true }) } catch (e) { log('updateJobPatch failed', e && (e.message || e)) }
+    }
+
+    await updateJobPatch({ status: sanitizeStatus('processing'), progress: clampProgress(5), message: 'Processing started', startedAt: admin.firestore.FieldValue.serverTimestamp(), lockedAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() })
 
     // Normalize inputSpec
     let downloadURL = null
@@ -179,7 +196,7 @@ async function processJob(jobId, inputSpec) {
       try {
         const bucketName = DEFAULT_BUCKET_NAME
         console.log(`[worker] ${jobId} downloading using storagePath=${storagePath} bucket=${bucketName}`)
-        await db.collection('jobs').doc(jobId).set({ progress: 5, message: 'Downloading from storagePath', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true })
+        await updateJobPatch({ progress: 5, message: 'Downloading from storagePath', updatedAt: admin.firestore.FieldValue.serverTimestamp() })
         const bucketObj = getBucketObject(bucketName)
         const remoteFile = bucketObj.file(storagePath)
         const [exists] = await remoteFile.exists()
@@ -193,7 +210,7 @@ async function processJob(jobId, inputSpec) {
           rs.pipe(ws)
         })
         jlog('download_complete', { localIn })
-        await db.collection('jobs').doc(jobId).set({ progress: 20, message: 'Downloaded from storagePath', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true })
+        await updateJobPatch({ progress: 20, message: 'Downloaded from storagePath', updatedAt: admin.firestore.FieldValue.serverTimestamp() })
         downloaded = true
       } catch (e) {
         console.warn(`[worker] ${jobId} storagePath download failed, will try gsUri/downloadURL:`, e && (e.message || e))
@@ -204,10 +221,10 @@ async function processJob(jobId, inputSpec) {
     if (!downloaded && gsUri) {
       try {
         console.log(`[worker] ${jobId} downloading using gsUri=${gsUri}`)
-        await db.collection('jobs').doc(jobId).set({ progress: 5, message: 'Downloading from gsUri', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true })
+        await updateJobPatch({ progress: 5, message: 'Downloading from gsUri', updatedAt: admin.firestore.FieldValue.serverTimestamp() })
         await downloadFromGs(gsUri, localIn)
         jlog('download_complete', { localIn })
-        await db.collection('jobs').doc(jobId).set({ progress: 20, message: 'Downloaded from gsUri', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true })
+        await updateJobPatch({ progress: 20, message: 'Downloaded from gsUri', updatedAt: admin.firestore.FieldValue.serverTimestamp() })
         downloaded = true
       } catch (e) {
         console.warn(`[worker] ${jobId} gsUri download failed, will try downloadURL:`, e && (e.message || e))
@@ -222,10 +239,10 @@ async function processJob(jobId, inputSpec) {
         const redacted = downloadURL.replace(/(token=)[^&]+/i, '$1<redacted>')
         console.log(`[worker] ${jobId} downloading using downloadURL (redacted): ${redacted.slice(0,120)}`)
         console.log(`[worker] ${jobId} downloadURL alt=media=${containsAlt} token=${containsToken}`)
-        await db.collection('jobs').doc(jobId).set({ progress: 5, message: 'Downloading from URL', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true })
+        await updateJobPatch({ progress: 5, message: 'Downloading from URL', updatedAt: admin.firestore.FieldValue.serverTimestamp() })
         await streamDownload(downloadURL, localIn)
         jlog('download_complete', { localIn })
-        await db.collection('jobs').doc(jobId).set({ progress: 20, message: 'Downloaded from URL', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true })
+        await updateJobPatch({ progress: 20, message: 'Downloaded from URL', updatedAt: admin.firestore.FieldValue.serverTimestamp() })
         downloaded = true
       } catch (e) {
         console.warn(`[worker] ${jobId} HTTP download failed:`, e && (e.message || e))
@@ -258,7 +275,7 @@ async function processJob(jobId, inputSpec) {
     // Helper: update job stage
     async function setStage(stage, percent, message) {
       try {
-        await db.collection('jobs').doc(jobId).set({ stage, progress: percent, message, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true })
+        await updateJobPatch({ stage, progress: percent, message, updatedAt: admin.firestore.FieldValue.serverTimestamp() })
       } catch (e) { log('failed setStage', e && (e.stack || e.message || e)) }
     }
 

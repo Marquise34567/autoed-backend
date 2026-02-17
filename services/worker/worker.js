@@ -37,6 +37,21 @@ function log(jobId, ...args) {
   else console.log('[worker]', ...args)
 }
 
+function clampProgress(v) {
+  const n = Number(v) || 0
+  if (Number.isNaN(n)) return 0
+  if (n < 0) return 0
+  if (n > 100) return 100
+  return Math.round(n)
+}
+
+function safeErrorMessage(err) {
+  if (!err) return 'Unknown error'
+  if (typeof err === 'string') return err
+  if (err.message) return err.message
+  try { return JSON.stringify(err).slice(0, 1000) } catch (e) { return String(err) }
+}
+
 function sanitizeStatus(s) {
   const allowed = ['queued', 'processing', 'completed', 'failed']
   const v = (s || '').toString().toLowerCase()
@@ -59,20 +74,35 @@ async function claimOne() {
         return allowed.includes(v) ? v : null
       }
     if (PROCESSING_TIMEOUT_MS > 0) {
-      const cutoff = admin.firestore.Timestamp.fromMillis(Date.now() - PROCESSING_TIMEOUT_MS)
-      const stale = await db.collection('jobs').where('status', '==', 'processing').where('lockedAt', '<', cutoff).limit(10).get()
-      if (!stale.empty) {
-        for (const doc of stale.docs) {
-          try {
-            await doc.ref.set({ status: 'failed', errorMessage: 'worker watchdog: processing timeout', failedAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true })
-            log(doc.id, 'watchdog marked as failed due to timeout')
-          } catch (e) { log(doc.id, 'watchdog failed to mark', e && (e.message || e)) }
-        }
+      const cutoffMs = Date.now() - PROCESSING_TIMEOUT_MS
+      // Avoid composite-index queries: fetch processing/uploading docs and filter client-side
+      const checkStatuses = ['processing', 'uploading']
+      for (const st of checkStatuses) {
+        try {
+          const snap = await db.collection('jobs').where('status', '==', st).limit(50).get()
+          if (!snap.empty) {
+            for (const doc of snap.docs) {
+              const data = doc.data() || {}
+              let updatedMillis = 0
+              try {
+                if (data.updatedAt && data.updatedAt.toMillis) updatedMillis = data.updatedAt.toMillis()
+                else updatedMillis = new Date(data.updatedAt || 0).getTime()
+              } catch (e) { updatedMillis = 0 }
+              if (updatedMillis && updatedMillis < cutoffMs) {
+                try {
+                  await doc.ref.set({ status: 'failed', errorMessage: 'Job timed out (watchdog)', failedAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp(), progress: 0 }, { merge: true })
+                  log(doc.id, `watchdog marked ${st} as failed due to timeout`)
+                } catch (e) { log(doc.id, 'watchdog failed to mark', e && (e.message || e)) }
+              }
+            }
+          }
+        } catch (e) { log(null, 'watchdog status scan failed', st, e && (e.message || e)) }
       }
     }
   } catch (e) { log(null, 'watchdog error', e && (e.message || e)) }
   try {
-    // Query for lowercase queued only
+    // Query for lowercase queued only (no ordering to avoid composite index requirements)
+    console.log('[worker] query shape: collection=jobs where=status==queued limit=1')
     const q = await db.collection('jobs').where('status', '==', 'queued').limit(1).get()
     if (q.empty) {
       log(null, 'scan result: 0 queued jobs')
@@ -96,7 +126,7 @@ async function claimOne() {
           try { lockedMillis = data.lockedAt.toMillis ? data.lockedAt.toMillis() : (new Date(data.lockedAt)).getTime() } catch (e) { lockedMillis = 0 }
           if (lockedMillis && (nowMs - lockedMillis) < LOCK_AGE_MS) return null
         }
-        tx.update(ref, { status: sanitizeStatus('processing'), progress: 5, lockedAt: admin.firestore.FieldValue.serverTimestamp(), workerId, updatedAt: admin.firestore.FieldValue.serverTimestamp() })
+        tx.update(ref, { status: sanitizeStatus('processing'), progress: clampProgress(5), lockedAt: admin.firestore.FieldValue.serverTimestamp(), workerId, updatedAt: admin.firestore.FieldValue.serverTimestamp() })
         return { id: ref.id, data }
       })
       if (claimed) log(claimed.id, 'claimed job', claimed.id, 'by', workerId, 'oldStatus=', claimed.data && claimed.data.status)
@@ -146,7 +176,7 @@ async function workerLoop() {
       // Immediately mark progress to ensure frontend sees work started
       try {
         await db.collection('jobs').doc(jobId).update({
-          progress: 5,
+          progress: clampProgress(5),
           status: sanitizeStatus('processing'),
           updatedAt: admin.firestore.FieldValue.serverTimestamp()
         })
@@ -187,8 +217,9 @@ async function workerLoop() {
               try {
                 await db.collection('jobs').doc(jobId).update({
                   status: sanitizeStatus('failed') || 'failed',
-                  progress: 0,
+                  progress: clampProgress(0),
                   errorMessage: 'Failed to generate signed download URL for output',
+                  errorStack: null,
                   updatedAt: admin.firestore.FieldValue.serverTimestamp()
                 })
                 console.error(`[worker] ${jobId} -> failed to write resultUrl; marked failed`)
@@ -199,7 +230,7 @@ async function workerLoop() {
               // Write canonical completed state including https resultUrl and gs path for debugging
               try {
                 await db.collection('jobs').doc(jobId).update({
-                  progress: 100,
+                  progress: clampProgress(100),
                   status: sanitizeStatus('completed'),
                   resultUrl: signedUrl,
                   finalVideoPath: gsPath || finalPath,
@@ -217,8 +248,9 @@ async function workerLoop() {
           try {
             await db.collection('jobs').doc(jobId).update({
               status: sanitizeStatus('failed'),
-              progress: 0,
-              error: e && (e.message || String(e)),
+              progress: clampProgress(0),
+              errorMessage: safeErrorMessage(e),
+              errorStack: (e && e.stack) ? String(e.stack).slice(0, 2000) : null,
               updatedAt: admin.firestore.FieldValue.serverTimestamp()
             })
           } catch (er) { log(jobId, 'failed to write error state', er) }

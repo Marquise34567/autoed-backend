@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "node index.js",
+    "prestart": "node scripts/check-no-conflicts.js",
     "build": "tsc -p .",
     "start": "node index.js",
     "worker": "node worker.js",

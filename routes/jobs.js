@@ -67,9 +67,9 @@ router.get('/', async (req, res) => {
           // Enforce: a job must not be considered completed without a resultUrl
           if (norm.status === 'completed' && !norm.resultUrl) {
             try {
-              await db.collection('jobs').doc(qid).set({ status: 'failed', error: 'Legacy job missing resultUrl', progress: 100, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true })
+              await db.collection('jobs').doc(qid).set({ status: 'failed', errorMessage: 'Legacy job missing resultUrl', progress: 100, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true })
             } catch (e) { console.warn('[jobs] failed to mark legacy completed job as failed', e && (e.stack || e.message || e)) }
-            return res.status(200).json({ ok: true, jobId: norm.id || qid, status: 'failed', progress: 100, resultUrl: null, finalVideoPath: null, error: 'Legacy job missing resultUrl', updatedAt: norm.updatedAt || null })
+            return res.status(200).json({ ok: true, jobId: norm.id || qid, status: 'failed', progress: 100, resultUrl: null, finalVideoPath: null, errorMessage: 'Legacy job missing resultUrl', updatedAt: norm.updatedAt || null })
           }
           const out = {
             ok: true,
@@ -78,6 +78,7 @@ router.get('/', async (req, res) => {
             progress: Number.isFinite(Number(norm.progress)) ? Number(norm.progress) : null,
             resultUrl: norm.resultUrl || null,
             finalVideoPath: norm.finalVideoPath || null,
+            errorMessage: norm.errorMessage || norm.error || null,
             error: norm.errorMessage || norm.error || null,
             updatedAt: norm.updatedAt || null
           }
@@ -102,7 +103,9 @@ router.get('/', async (req, res) => {
 
     // list all — prefer Firestore collection if available
     if (db) {
-      const snaps = await db.collection('jobs').orderBy('createdAt', 'desc').limit(100).get()
+        // Query shape: orderBy createdAt desc limit 100. If callers filter by userId, prefer client-side sorting to avoid composite indexes.
+        console.log('[jobs] query shape: collection=jobs orderBy=createdAt DESC limit=100')
+        const snaps = await db.collection('jobs').orderBy('createdAt', 'desc').limit(100).get()
       let arr = []
       snaps.forEach(s => arr.push(s.data()))
       try { arr = await Promise.all(arr.map(j => attachSignedUrlsToJob(j, 30))) } catch (e) {}
@@ -132,7 +135,7 @@ router.get('/:id', async (req, res) => {
           job = normalizeJobRecord(job)
           // If a legacy job reports completed but has no resultUrl, mark failed
           if (job.status === 'completed' && !job.resultUrl) {
-            try { await db.collection('jobs').doc(id).set({ status: 'failed', error: 'Legacy job missing resultUrl', progress: 100, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }) } catch (e) { console.warn('[jobs] failed to mark legacy completed job as failed', e && (e.stack || e.message || e)) }
+            try { await db.collection('jobs').doc(id).set({ status: 'failed', errorMessage: 'Legacy job missing resultUrl', progress: 100, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }) } catch (e) { console.warn('[jobs] failed to mark legacy completed job as failed', e && (e.stack || e.message || e)) }
             const outFail = { id: job.id, status: 'failed', progress: 100, errorMessage: 'Legacy job missing resultUrl', resultUrl: null }
             return res.status(200).json({ ok: true, job: outFail })
           }

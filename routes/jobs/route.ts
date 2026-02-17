@@ -28,10 +28,9 @@ export async function POST(request: Request) {
     const job = await createJob({
       id: jobId,
       uid: inferredUid,
-      phase: 'UPLOADING',
       overallProgress: 0,
       overallEtaSec: null,
-      message: 'Upload complete',
+      message: 'Created',
       createdAt: Date.now(),
       // Persist canonical storage info
       storagePath: storagePath,
