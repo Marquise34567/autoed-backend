@@ -2,7 +2,8 @@ const express = require('express')
 const crypto = require('crypto')
 const router = express.Router()
 // note: heavy processing moved to worker; keep route lightweight
-const { admin, db } = require('../services/firebaseAdmin')
+const admin = require('../services/firebaseAdmin')
+const db = (admin && admin.db) || null
 const { getSignedUrlForPath, attachSignedUrlsToJob } = require('../utils/storageSignedUrl')
 const { enqueue, reenqueue, listQueued } = require('../services/worker/queue')
 // db is defined above
@@ -71,11 +72,11 @@ router.get('/', async (req, res) => {
             } catch (e) { console.warn('[jobs] failed to mark legacy completed job as failed', e && (e.stack || e.message || e)) }
             return res.status(200).json({ ok: true, jobId: norm.id || qid, status: 'failed', progress: 100, resultUrl: null, finalVideoPath: null, errorMessage: 'Legacy job missing resultUrl', updatedAt: norm.updatedAt || null })
           }
-          // If job succeeded and has an outputPath, attach a signed download URL
+          // If job completed and has an outputPath, attach a signed download URL
           let downloadUrl = null
           const possibleOutput = (job && (job.outputPath || job.finalVideoPath || job.resultPath)) || null
           try {
-            if (norm.status === 'succeeded' && possibleOutput) {
+            if (norm.status === 'completed' && possibleOutput) {
               downloadUrl = await getSignedUrlForPath(possibleOutput, 60)
             }
           } catch (e) { console.warn('[jobs] failed to generate signed URL for job GET', e && (e.message || e)) }
@@ -152,7 +153,7 @@ router.get('/:id', async (req, res) => {
           let downloadUrl = null
           const possibleOutput = job && (job.outputPath || job.finalVideoPath || job.resultPath) || null
           try {
-            if (job.status === 'succeeded' && possibleOutput) {
+            if (job.status === 'completed' && possibleOutput) {
               downloadUrl = await getSignedUrlForPath(possibleOutput, 60)
             }
           } catch (e) { console.warn('[jobs] failed to generate signed URL for job GET/:id', e && (e.message || e)) }
@@ -295,11 +296,13 @@ router.post('/', async (req, res) => {
     const body = req.body || {}
     const authHeader = req.headers && req.headers.authorization
     let userId = body.userId || null
-    if (!userId && authHeader && typeof authHeader === 'string' && authHeader.toLowerCase().startsWith('bearer ')) {
-      const token = authHeader.split(' ')[1]
+    if (!userId && authHeader) {
       try {
-        const decoded = await admin.auth().verifyIdToken(token)
-        userId = decoded && decoded.uid ? decoded.uid : null
+        const token = authHeader && authHeader.startsWith && authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader
+        if (admin && admin.auth && typeof admin.auth === 'function') {
+          const decoded = await admin.auth().verifyIdToken(token)
+          if (decoded && decoded.uid) userId = decoded.uid
+        }
       } catch (e) {
         console.warn('[jobs] failed to verify id token', e && e.message || e)
       }
