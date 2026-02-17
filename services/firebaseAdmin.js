@@ -49,16 +49,8 @@ try {
 
   if (!credential) {
     const missing = ['FIREBASE_SERVICE_ACCOUNT_JSON or FIREBASE_PROJECT_ID/FIREBASE_CLIENT_EMAIL/FIREBASE_PRIVATE_KEY']
-    console.warn('[firebaseAdmin] Firebase credentials not configured. Missing:', missing.join(', '))
-    // export a stub that throws when used
-    const stub = {
-      _missingEnv: missing,
-      admin: null,
-      db: null,
-      bucket: null,
-      getBucket: () => { throw makeMissingError(missing) }
-    }
-    module.exports = stub
+    // Fail fast: missing credentials should abort startup so Railway shows the error
+    throw new Error('[FATAL] Firebase credentials not configured. Missing: ' + missing.join(', '))
   } else {
     admin = adminLib
     if (!admin.apps.length) {
@@ -81,7 +73,11 @@ try {
       } catch (e) { console.warn('[firebaseAdmin] failed to log projectId/envs', e && e.message) }
     }
     db = admin.firestore()
-    try { bucket = admin.storage().bucket(storageBucket) } catch (e) { bucket = null }
+    try {
+      // Ensure storage bucket is present and use it explicitly
+      if (!storageBucket) throw new Error('[FATAL] FIREBASE_STORAGE_BUCKET not configured')
+      bucket = admin.storage().bucket(storageBucket)
+    } catch (e) { throw e }
 
     // Log Firestore settings for debugging (non-sensitive)
     try {

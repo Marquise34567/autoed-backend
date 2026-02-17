@@ -62,6 +62,14 @@ function sanitizeStatus(s) {
 console.log('[worker] enabled =', WORKER_ENABLED, 'NODE_ENV =', process.env.NODE_ENV)
 console.log('[worker] Firestore db initialized:', !!db)
 
+// Surface Firebase env presence for worker startup diagnostics
+console.log('[env] firebase', {
+  FIREBASE_PROJECT_ID: process.env.FIREBASE_PROJECT_ID || null,
+  FIREBASE_STORAGE_BUCKET: process.env.FIREBASE_STORAGE_BUCKET || null,
+  FIREBASE_CLIENT_EMAIL_present: !!process.env.FIREBASE_CLIENT_EMAIL,
+  FIREBASE_PRIVATE_KEY_present: !!process.env.FIREBASE_PRIVATE_KEY,
+})
+
 async function claimOne() {
   if (!db) return null
   const workerId = process.env.RAILWAY_SERVICE_NAME || os.hostname()

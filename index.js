@@ -59,6 +59,14 @@ const express = require('express')
 // Boot log for entry file identification
 console.log('✅ Booting backend entry:', __filename)
 
+// Surface Firebase env presence immediately at startup for Railway diagnostics
+console.log('[env] firebase', {
+  FIREBASE_PROJECT_ID: process.env.FIREBASE_PROJECT_ID || null,
+  FIREBASE_STORAGE_BUCKET: process.env.FIREBASE_STORAGE_BUCKET || null,
+  FIREBASE_CLIENT_EMAIL_present: !!process.env.FIREBASE_CLIENT_EMAIL,
+  FIREBASE_PRIVATE_KEY_present: !!process.env.FIREBASE_PRIVATE_KEY,
+})
+
 // Deploy marker to verify production has the latest code
 const DEPLOY_MARKER = process.env.DEPLOY_MARKER || new Date().toISOString()
 console.log('DEPLOY_MARKER=', DEPLOY_MARKER)
@@ -249,6 +257,20 @@ app.get('/api/debug/firebase-info', (req, res) => {
     return res.json({ ok: true, info })
   } catch (e) {
     console.error('[debug/firebase-info] error', e && (e.stack || e.message || e))
+    return res.status(500).json({ ok: false, error: e && e.message })
+  }
+})
+
+// Runtime env debug endpoint
+app.get('/api/debug/env', (req, res) => {
+  try {
+    return res.json({ ok: true,
+      FIREBASE_PROJECT_ID: process.env.FIREBASE_PROJECT_ID || null,
+      FIREBASE_STORAGE_BUCKET: process.env.FIREBASE_STORAGE_BUCKET || null,
+      FIREBASE_CLIENT_EMAIL_present: !!process.env.FIREBASE_CLIENT_EMAIL,
+      FIREBASE_PRIVATE_KEY_present: !!process.env.FIREBASE_PRIVATE_KEY,
+    })
+  } catch (e) {
     return res.status(500).json({ ok: false, error: e && e.message })
   }
 })
