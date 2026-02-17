@@ -738,6 +738,26 @@ async function processJob(jobId, inputSpec) {
         console.log(`[worker] file exists: ${exists} for ${outputPath}`)
         if (!exists) throw new Error('Output upload failed: object not found after upload')
         uploaded = true
+        // Log bucket/path and verify object existence via admin.storage() to catch gs:// mistakes
+        try {
+          const outBucketName = (bucketObj && bucketObj.name) ? bucketObj.name : bucketName
+          console.log('[worker] output bucket:', outBucketName)
+          console.log('[worker] output path:', outputPath)
+          try {
+            const storageBucket = admin.storage().bucket(outBucketName)
+            const [existsAfter] = await storageBucket.file(outputPath).exists()
+            console.log('[worker] output exists after upload:', existsAfter)
+          } catch (ee) {
+            console.warn('[worker] failed to verify output existence via admin.storage():', ee && (ee.message || ee))
+          }
+          // Persist explicit output references on job doc for downstream routes
+          try {
+            await db.collection('jobs').doc(jobId).set({ outputPath: outputPath, outputBucket: outBucketName, outputGsUri: `gs://${outBucketName}/${outputPath}` }, { merge: true })
+            jlog('persisted_output_refs', { outputPath, outputBucket: outBucketName })
+          } catch (ee) {
+            console.warn('[worker] failed to persist output refs to job doc', ee && (ee.message || ee))
+          }
+        } catch (e) {}
         try {
           const { getSignedUrlDetailed } = require('../../utils/storageSignedUrl')
           const signRes = await getSignedUrlDetailed(outputPath, 60)
