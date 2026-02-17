@@ -695,7 +695,11 @@ async function processJob(jobId, inputSpec) {
       console.error(`[worker:${jobId}] failed to upload output video`, e && (e.stack || e.message || e))
     }
 
+<<<<<<< HEAD
     // Update job doc: include output path and optionally signed URL for download
+=======
+    // Update job doc: include output path and signed URLs for download if available
+>>>>>>> 7c31d6bcf4c741036562bcdd56b8fe424bc52dea
     const jobUpdate = {
       status: sanitizeStatus('completed'),
       progress: 100,
@@ -703,6 +707,11 @@ async function processJob(jobId, inputSpec) {
       message: 'Completed',
       resultUrl: outputUrl || resultUrl || null,
       finalVideoPath: destVideoPath || null,
+<<<<<<< HEAD
+=======
+      outputUrl: outputUrl || null,
+      outputPath: destVideoPath || null,
+>>>>>>> 7c31d6bcf4c741036562bcdd56b8fe424bc52dea
     }
     jlog('stage_finalize')
     await db.collection('jobs').doc(jobId).set(jobUpdate, { merge: true })

@@ -379,9 +379,9 @@ router.post('/', async (req, res) => {
         input: inputSpec,
         filename: filename || null,
         contentType: contentType || null,
-        lockedAt: null,
-        workerId: null,
-      }, { merge: false })
+          lockedAt: null,
+          workerId: null,
+        }, { merge: true })
     } catch (err) {
       console.error('JOB_PERSIST_ERROR', err && (err.stack || err.message || err))
       return res.status(500).json({

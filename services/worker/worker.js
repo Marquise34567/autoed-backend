@@ -1,4 +1,5 @@
-const { admin, db } = require('../firebaseAdmin')
+const admin = require('../firebaseAdmin')
+const db = (admin && (admin.db || (typeof admin.firestore === 'function' ? admin.firestore() : null))) || null
 const { exec } = require('child_process')
 const { processJob } = require('./processJob')
 const fs = require('fs')
@@ -34,6 +35,12 @@ const startTime = Date.now()
 function log(jobId, ...args) {
   if (jobId) console.log('[worker]', jobId, ...args)
   else console.log('[worker]', ...args)
+}
+
+function sanitizeStatus(s) {
+  const allowed = ['queued', 'processing', 'completed', 'failed']
+  const v = (s || '').toString().toLowerCase()
+  return allowed.includes(v) ? v : null
 }
 
 console.log('[worker] enabled =', WORKER_ENABLED, 'NODE_ENV =', process.env.NODE_ENV)
@@ -157,9 +164,11 @@ async function workerLoop() {
           const result = await processJob(jobId, inputSpec)
           log(jobId, 'processing finished', result)
           try {
+            // Prefer finalVideoPath -> require a downloadable signed URL before marking completed
             const finalPath = (result && result.finalVideoPath) || null
             let signedUrl = (result && result.resultUrl) || null
 
+            // If we have a final path but no signed URL, try to generate one
             if (finalPath && !signedUrl) {
               try {
                 signedUrl = await getSignedUrlForPath(finalPath, 60)
@@ -169,6 +178,10 @@ async function workerLoop() {
               }
             }
 
+<<<<<<< HEAD
+=======
+            // Compute GS path for debugging if possible
+>>>>>>> 7c31d6bcf4c741036562bcdd56b8fe424bc52dea
             let gsPath = null
             try {
               const bucketName = (admin && typeof admin.getBucketName === 'function') ? admin.getBucketName() : (process.env.FIREBASE_STORAGE_BUCKET || null)
@@ -178,6 +191,7 @@ async function workerLoop() {
             } catch (e) { gsPath = finalPath }
 
             if (!signedUrl) {
+              // If we couldn't obtain a signed URL, mark job failed (do not mark completed)
               try {
                 await db.collection('jobs').doc(jobId).update({
                   status: sanitizeStatus('failed') || 'failed',
@@ -190,6 +204,7 @@ async function workerLoop() {
                 log(jobId, 'failed to write failure state after missing signed URL', er)
               }
             } else {
+              // Write canonical completed state including https resultUrl and gs path for debugging
               try {
                 await db.collection('jobs').doc(jobId).update({
                   progress: 100,
