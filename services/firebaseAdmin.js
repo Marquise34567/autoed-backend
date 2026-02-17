@@ -74,7 +74,7 @@ try {
     admin.getBucket = (name) => admin.storage().bucket(name || storageBucket)
     admin.getBucketName = () => storageBucket
 
-    module.exports = admin
+    module.exports = { admin, db, bucket }
   }
 } catch (e) {
   console.error('[firebaseAdmin] initialization error', e && (e.stack || e.message || e))

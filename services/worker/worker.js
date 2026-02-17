@@ -1,4 +1,4 @@
-const admin = require('../firebaseAdmin')
+const { admin, db } = require('../firebaseAdmin')
 const { exec } = require('child_process')
 const { processJob } = require('./processJob')
 const fs = require('fs')
@@ -31,6 +31,7 @@ function log(jobId, ...args) {
 }
 
 console.log('[worker] enabled =', WORKER_ENABLED, 'NODE_ENV =', process.env.NODE_ENV)
+console.log('[worker] Firestore db initialized:', !!db)
 
 async function claimOne() {
   if (!db) return null
