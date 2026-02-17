@@ -8,6 +8,11 @@ const { listQueued } = require('./queue')
 
 // `db` provided by services/firebaseAdmin
 
+if (!db) {
+  console.error('Firestore db is undefined')
+  process.exit(1)
+}
+
 const os = require('os')
 const POLL_MS = parseInt(process.env.WORKER_POLL_MS || '2000', 10)
 const CONCURRENCY = parseInt(process.env.WORKER_CONCURRENCY || '2', 10)
@@ -38,6 +43,7 @@ function sanitizeStatus(s) {
 }
 
 console.log('[worker] enabled =', WORKER_ENABLED, 'NODE_ENV =', process.env.NODE_ENV)
+console.log('[worker] Firestore db initialized:', !!db)
 
 async function claimOne() {
   if (!db) return null
@@ -46,11 +52,6 @@ async function claimOne() {
   log(null, "scan: querying jobs where status=='queued' (with uppercase fallback)")
   // Watchdog: find stuck processing jobs older than threshold and mark failed
   try {
-      function sanitizeStatus(s) {
-        const allowed = ['queued', 'processing', 'completed', 'failed']
-        const v = (s || '').toString().toLowerCase()
-        return allowed.includes(v) ? v : null
-      }
     if (PROCESSING_TIMEOUT_MS > 0) {
       const cutoff = admin.firestore.Timestamp.fromMillis(Date.now() - PROCESSING_TIMEOUT_MS)
       const stale = await db.collection('jobs').where('status', '==', 'processing').where('lockedAt', '<', cutoff).limit(10).get()
@@ -139,16 +140,42 @@ async function workerLoop() {
       const jobDoc = snap.exists ? snap.data() : null
       let inputSpec = (jobDoc && jobDoc.inputSpec) || jobDoc || null
 
+      // Immediately mark progress to ensure frontend sees work started
+      try {
+        await db.collection('jobs').doc(jobId).update({
+          progress: 10,
+          status: 'processing',
+          updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        })
+      } catch (e) {
+        log(jobId, 'failed to mark progress after claim', e && (e.message || e))
+      }
+
       // Start processing without blocking the loop (up to concurrency limit)
       const p = (async () => {
         log(jobId, 'input resolved, starting processJob')
         try {
-          await processJob(jobId, inputSpec)
-          log(jobId, 'processing finished')
-          try { await db.collection('jobs').doc(jobId).set({ status: sanitizeStatus('completed'), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }) } catch (er) { log(jobId, 'failed to mark completed', er) }
+          const result = await processJob(jobId, inputSpec)
+          log(jobId, 'processing finished', result)
+          try {
+            await db.collection('jobs').doc(jobId).update({
+              progress: 100,
+              status: sanitizeStatus('completed'),
+              resultUrl: (result && result.resultUrl) || null,
+              finalVideoPath: (result && result.finalVideoPath) || null,
+              updatedAt: admin.firestore.FieldValue.serverTimestamp()
+            })
+          } catch (er) { log(jobId, 'failed to mark completed', er) }
         } catch (e) {
           log(jobId, 'processing error', e && (e.stack || e.message || e))
-          try { await db.collection('jobs').doc(jobId).set({ status: sanitizeStatus('failed'), progress: 0, error: e && (e.message || String(e)), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }) } catch (er) { log(jobId, 'failed to write error state', er) }
+          try {
+            await db.collection('jobs').doc(jobId).update({
+              status: sanitizeStatus('failed'),
+              progress: 0,
+              error: e && (e.message || String(e)),
+              updatedAt: admin.firestore.FieldValue.serverTimestamp()
+            })
+          } catch (er) { log(jobId, 'failed to write error state', er) }
         } finally {
           activeJobs.delete(jobId)
         }
@@ -167,6 +194,10 @@ async function workerLoop() {
 
 function start() {
   if (!WORKER_ENABLED) return log(null, 'WORKER_ENABLED not true; skipping start')
+  if (!db) {
+    console.error('[worker] db missing')
+    process.exit(1)
+  }
   // check ffmpeg availability
   try {
     exec('ffmpeg -version', { timeout: 8000 }, (err, stdout, stderr) => {

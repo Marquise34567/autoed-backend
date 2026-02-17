@@ -74,6 +74,10 @@ try {
     admin.getBucket = (name) => admin.storage().bucket(name || storageBucket)
     admin.getBucketName = () => storageBucket
 
+    // Export the admin library as the module, but keep `admin.db` and `admin.bucket`
+    // so callers using either `const admin = require('...')` or
+    // `const { admin, db } = require('...')` will work.
+    try { admin.admin = admin } catch (e) {}
     module.exports = admin
   }
 } catch (e) {

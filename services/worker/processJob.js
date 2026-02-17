@@ -138,6 +138,7 @@ async function processJob(jobId, inputSpec) {
   function log(event, ...args) { jlog(event, { args }) }
 
   jlog('process_start', { hasInputSpec: !!inputSpec })
+  console.log('[worker] Processing job:', jobId)
   try {
     if (!db) throw new Error('Firestore db not initialized')
 
@@ -178,7 +179,7 @@ async function processJob(jobId, inputSpec) {
       try {
         const bucketName = DEFAULT_BUCKET_NAME
         console.log(`[worker] ${jobId} downloading using storagePath=${storagePath} bucket=${bucketName}`)
-        await db.collection('jobs').doc(jobId).set({ progress: 5, message: 'Downloading from storagePath', updatedAt: Date.now() }, { merge: true })
+        await db.collection('jobs').doc(jobId).set({ progress: 5, message: 'Downloading from storagePath', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true })
         const bucketObj = getBucketObject(bucketName)
         const remoteFile = bucketObj.file(storagePath)
         const [exists] = await remoteFile.exists()
@@ -192,7 +193,7 @@ async function processJob(jobId, inputSpec) {
           rs.pipe(ws)
         })
         jlog('download_complete', { localIn })
-        await db.collection('jobs').doc(jobId).set({ progress: 20, message: 'Downloaded from storagePath', updatedAt: Date.now() }, { merge: true })
+        await db.collection('jobs').doc(jobId).set({ progress: 20, message: 'Downloaded from storagePath', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true })
         downloaded = true
       } catch (e) {
         console.warn(`[worker] ${jobId} storagePath download failed, will try gsUri/downloadURL:`, e && (e.message || e))
@@ -203,10 +204,10 @@ async function processJob(jobId, inputSpec) {
     if (!downloaded && gsUri) {
       try {
         console.log(`[worker] ${jobId} downloading using gsUri=${gsUri}`)
-        await db.collection('jobs').doc(jobId).set({ progress: 5, message: 'Downloading from gsUri', updatedAt: Date.now() }, { merge: true })
+        await db.collection('jobs').doc(jobId).set({ progress: 5, message: 'Downloading from gsUri', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true })
         await downloadFromGs(gsUri, localIn)
         jlog('download_complete', { localIn })
-        await db.collection('jobs').doc(jobId).set({ progress: 20, message: 'Downloaded from gsUri', updatedAt: Date.now() }, { merge: true })
+        await db.collection('jobs').doc(jobId).set({ progress: 20, message: 'Downloaded from gsUri', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true })
         downloaded = true
       } catch (e) {
         console.warn(`[worker] ${jobId} gsUri download failed, will try downloadURL:`, e && (e.message || e))
@@ -221,10 +222,10 @@ async function processJob(jobId, inputSpec) {
         const redacted = downloadURL.replace(/(token=)[^&]+/i, '$1<redacted>')
         console.log(`[worker] ${jobId} downloading using downloadURL (redacted): ${redacted.slice(0,120)}`)
         console.log(`[worker] ${jobId} downloadURL alt=media=${containsAlt} token=${containsToken}`)
-        await db.collection('jobs').doc(jobId).set({ progress: 5, message: 'Downloading from URL', updatedAt: Date.now() }, { merge: true })
+        await db.collection('jobs').doc(jobId).set({ progress: 5, message: 'Downloading from URL', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true })
         await streamDownload(downloadURL, localIn)
         jlog('download_complete', { localIn })
-        await db.collection('jobs').doc(jobId).set({ progress: 20, message: 'Downloaded from URL', updatedAt: Date.now() }, { merge: true })
+        await db.collection('jobs').doc(jobId).set({ progress: 20, message: 'Downloaded from URL', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true })
         downloaded = true
       } catch (e) {
         console.warn(`[worker] ${jobId} HTTP download failed:`, e && (e.message || e))
@@ -695,6 +696,7 @@ async function processJob(jobId, inputSpec) {
     }
 
     // Update job doc: include output path and optionally signed URL for download
+<<<<<<< HEAD
     const jobUpdate = {
       status: sanitizeStatus('completed'),
       progress: 100,
@@ -704,8 +706,19 @@ async function processJob(jobId, inputSpec) {
       finalVideoPath: destVideoPath || null,
     }
     jlog('stage_finalize')
+=======
+    const jobUpdate = { status: 'completed', progress: 100, updatedAt: admin.firestore.FieldValue.serverTimestamp(), message: 'Completed' }
+    if (resultUrl) jobUpdate.resultUrl = resultUrl
+    jlog('stage_finalize')
+
+    if (outputUrl) jobUpdate.outputUrl = outputUrl
+    jobUpdate.outputPath = destVideoPath
+>>>>>>> 328579ee08052cdf0354f3f2d4b1f16417caa78c
     await db.collection('jobs').doc(jobId).set(jobUpdate, { merge: true })
     jlog('job_db_updated', { resultPath: destResultPath, outputPath: destVideoPath })
+
+    // Return result info for worker to perform a final canonical update
+    return { resultUrl: resultUrl || outputUrl || null, finalVideoPath: destVideoPath || null }
 
     // cleanup
     try { fs.unlinkSync(localIn) } catch (e) {}

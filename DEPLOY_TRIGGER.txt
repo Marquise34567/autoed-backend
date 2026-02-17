@@ -1,5 +1,2 @@
-Deploy trigger
-Local HEAD: 14e0d73
-Timestamp: 2026-02-13T00:00:00Z
-
-This file is a no-op commit used to trigger CI/CD redeploys.
+force-deploy: marker created to trigger Railway rebuild
+timestamp: 2026-02-16T21:47:57.8170504-05:00
