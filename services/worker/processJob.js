@@ -7,7 +7,7 @@ const { exec } = require('child_process')
 const admin = require('../firebaseAdmin')
 let db = null
 let bucket = null
-try { db = admin && admin.firestore ? admin.firestore() : admin.db } catch (e) { db = admin && admin.db }
+try { db = (admin && (admin.db || (typeof admin.firestore === 'function' ? admin.firestore() : null))) || null } catch (e) { db = admin && admin.db }
 try { bucket = admin && admin.bucket ? admin.bucket : null } catch (e) { bucket = null }
 const { getSignedUrlForPath } = require('../../utils/storageSignedUrl')
 
@@ -141,7 +141,13 @@ async function processJob(jobId, inputSpec) {
   try {
     if (!db) throw new Error('Firestore db not initialized')
 
-    await db.collection('jobs').doc(jobId).set({ status: 'processing', progress: 0, message: 'Processing started', startedAt: admin.firestore.FieldValue.serverTimestamp(), lockedAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true })
+    function sanitizeStatus(s) {
+      const allowed = ['queued', 'processing', 'completed', 'failed']
+      const v = (s || '').toString().toLowerCase()
+      return allowed.includes(v) ? v : null
+    }
+
+    await db.collection('jobs').doc(jobId).set({ status: sanitizeStatus('processing'), progress: 5, message: 'Processing started', startedAt: admin.firestore.FieldValue.serverTimestamp(), lockedAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true })
 
     // Normalize inputSpec
     let downloadURL = null
@@ -689,12 +695,15 @@ async function processJob(jobId, inputSpec) {
     }
 
     // Update job doc: include output path and optionally signed URL for download
-    const jobUpdate = { status: 'completed', progress: 100, updatedAt: Date.now(), message: 'Completed' }
-    if (resultUrl) jobUpdate.resultUrl = resultUrl
-      jlog('stage_finalize')
-
-    if (outputUrl) jobUpdate.outputUrl = outputUrl
-    jobUpdate.outputPath = destVideoPath
+    const jobUpdate = {
+      status: sanitizeStatus('completed'),
+      progress: 100,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      message: 'Completed',
+      resultUrl: outputUrl || resultUrl || null,
+      finalVideoPath: destVideoPath || null,
+    }
+    jlog('stage_finalize')
     await db.collection('jobs').doc(jobId).set(jobUpdate, { merge: true })
     jlog('job_db_updated', { resultPath: destResultPath, outputPath: destVideoPath })
 
@@ -707,7 +716,7 @@ async function processJob(jobId, inputSpec) {
     const errStack = err && (err.stack || null)
     jlog('job_error', { message: errMsg, stack: errStack })
     try {
-      if (db) await db.collection('jobs').doc(jobId).set({ status: 'failed', progress: 0, errorMessage: errMsg, errorStack: errStack, failedAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp(), message: errMsg || 'Processing error' }, { merge: true })
+      if (db) await db.collection('jobs').doc(jobId).set({ status: sanitizeStatus('failed'), progress: 0, error: errMsg || String(err), errorMessage: errMsg, errorStack: errStack, failedAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp(), message: errMsg || 'Processing error' }, { merge: true })
     } catch (e) {
       jlog('failed_to_write_error', { message: e && (e.message || String(e)) })
     }

@@ -1,4 +1,5 @@
 const admin = require('../firebaseAdmin')
+const db = (admin && (admin.db || (typeof admin.firestore === 'function' ? admin.firestore() : null))) || null
 const { exec } = require('child_process')
 const { processJob } = require('./processJob')
 const fs = require('fs')
@@ -30,6 +31,12 @@ function log(jobId, ...args) {
   else console.log('[worker]', ...args)
 }
 
+function sanitizeStatus(s) {
+  const allowed = ['queued', 'processing', 'completed', 'failed']
+  const v = (s || '').toString().toLowerCase()
+  return allowed.includes(v) ? v : null
+}
+
 console.log('[worker] enabled =', WORKER_ENABLED, 'NODE_ENV =', process.env.NODE_ENV)
 
 async function claimOne() {
@@ -39,6 +46,11 @@ async function claimOne() {
   log(null, "scan: querying jobs where status=='queued' (with uppercase fallback)")
   // Watchdog: find stuck processing jobs older than threshold and mark failed
   try {
+      function sanitizeStatus(s) {
+        const allowed = ['queued', 'processing', 'completed', 'failed']
+        const v = (s || '').toString().toLowerCase()
+        return allowed.includes(v) ? v : null
+      }
     if (PROCESSING_TIMEOUT_MS > 0) {
       const cutoff = admin.firestore.Timestamp.fromMillis(Date.now() - PROCESSING_TIMEOUT_MS)
       const stale = await db.collection('jobs').where('status', '==', 'processing').where('lockedAt', '<', cutoff).limit(10).get()
@@ -80,7 +92,7 @@ async function claimOne() {
           try { lockedMillis = data.lockedAt.toMillis ? data.lockedAt.toMillis() : (new Date(data.lockedAt)).getTime() } catch (e) { lockedMillis = 0 }
           if (lockedMillis && (nowMs - lockedMillis) < LOCK_AGE_MS) return null
         }
-        tx.update(ref, { status: 'processing', progress: 0, lockedAt: admin.firestore.FieldValue.serverTimestamp(), workerId, updatedAt: admin.firestore.FieldValue.serverTimestamp() })
+        tx.update(ref, { status: sanitizeStatus('processing'), progress: 5, lockedAt: admin.firestore.FieldValue.serverTimestamp(), workerId, updatedAt: admin.firestore.FieldValue.serverTimestamp() })
         return { id: ref.id, data }
       })
       if (claimed) log(claimed.id, 'claimed job', claimed.id, 'by', workerId, 'oldStatus=', claimed.data && claimed.data.status)
@@ -133,10 +145,10 @@ async function workerLoop() {
         try {
           await processJob(jobId, inputSpec)
           log(jobId, 'processing finished')
-          try { await db.collection('jobs').doc(jobId).set({ status: 'completed', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }) } catch (er) { log(jobId, 'failed to mark completed', er) }
+          try { await db.collection('jobs').doc(jobId).set({ status: sanitizeStatus('completed'), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }) } catch (er) { log(jobId, 'failed to mark completed', er) }
         } catch (e) {
           log(jobId, 'processing error', e && (e.stack || e.message || e))
-          try { await db.collection('jobs').doc(jobId).set({ status: 'failed', progress: 0, error: e && (e.message || String(e)), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }) } catch (er) { log(jobId, 'failed to write error state', er) }
+          try { await db.collection('jobs').doc(jobId).set({ status: sanitizeStatus('failed'), progress: 0, error: e && (e.message || String(e)), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }) } catch (er) { log(jobId, 'failed to write error state', er) }
         } finally {
           activeJobs.delete(jobId)
         }
