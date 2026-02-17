@@ -64,6 +64,13 @@ router.get('/', async (req, res) => {
           try { job = await attachSignedUrlsToJob(job, 30) } catch (e) {}
           // Normalize but return canonical fields explicitly to avoid HTTP codes leaking into `status`
           const norm = normalizeJobRecord(job)
+          // Enforce: a job must not be considered completed without a resultUrl
+          if (norm.status === 'completed' && !norm.resultUrl) {
+            try {
+              await db.collection('jobs').doc(qid).set({ status: 'failed', error: 'Legacy job missing resultUrl', progress: 100, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true })
+            } catch (e) { console.warn('[jobs] failed to mark legacy completed job as failed', e && (e.stack || e.message || e)) }
+            return res.status(200).json({ ok: true, jobId: norm.id || qid, status: 'failed', progress: 100, resultUrl: null, finalVideoPath: null, error: 'Legacy job missing resultUrl', updatedAt: norm.updatedAt || null })
+          }
           const out = {
             ok: true,
             jobId: norm.id || qid,
@@ -123,6 +130,12 @@ router.get('/:id', async (req, res) => {
           let job = snap.data()
           try { job = await attachSignedUrlsToJob(job, 30) } catch (e) {}
           job = normalizeJobRecord(job)
+          // If a legacy job reports completed but has no resultUrl, mark failed
+          if (job.status === 'completed' && !job.resultUrl) {
+            try { await db.collection('jobs').doc(id).set({ status: 'failed', error: 'Legacy job missing resultUrl', progress: 100, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }) } catch (e) { console.warn('[jobs] failed to mark legacy completed job as failed', e && (e.stack || e.message || e)) }
+            const outFail = { id: job.id, status: 'failed', progress: 100, errorMessage: 'Legacy job missing resultUrl', resultUrl: null }
+            return res.status(200).json({ ok: true, job: outFail })
+          }
           // Return a consistent, minimal job view for frontend
           const out = {
             id: job.id,
