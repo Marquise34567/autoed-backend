@@ -741,15 +741,17 @@ async function processJob(jobId, inputSpec) {
         try {
           const { getSignedUrlDetailed } = require('../../utils/storageSignedUrl')
           const signRes = await getSignedUrlDetailed(outputPath, 60)
-          if (signRes && signRes.success) outputUrl = signRes.url
-          else {
-            console.warn('[worker] failed to generate signed URL for video (signing error)', signRes && signRes.error)
+          if (signRes && signRes.success) {
+            outputUrl = signRes.url
+          } else {
+            console.warn('[worker] signing failed for output', { jobId, outputPath, signing: signRes })
             outputUrl = null
+            try { await updateJobPatch({ signingError: signRes && signRes.error || null, signingDebug: signRes && signRes.debug || null }) } catch (ee) {}
           }
         } catch (err) {
-          // Signing failure should NOT cause the job to be marked failed — keep upload path and mark completed.
-          console.warn('[worker] failed to generate signed URL for video (signing error)', err && (err.message || err))
+          console.warn('[worker] failed to generate signed URL for video (exception)', err && (err.message || err))
           outputUrl = null
+          try { await updateJobPatch({ signingError: err && (err.message || String(err)), signingDebug: null }) } catch (ee) {}
         }
       } else {
         console.warn(`[worker:${jobId}] no local output file found at ${localOut}; skipping video upload`)

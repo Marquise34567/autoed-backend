@@ -18,7 +18,7 @@ function _normalizePath(p) {
 }
 
 async function getSignedUrlDetailed(objectPath, expiresMinutes = 30, bucketName = null) {
-  const attempted = { path: objectPath }
+  const attempted = { path: objectPath, bucket: null, fileExists: false }
   try {
     const normalized = _normalizePath(objectPath)
     if (!normalized) return { success: false, url: null, error: 'Output file missing before signing' }
@@ -42,8 +42,10 @@ async function getSignedUrlDetailed(objectPath, expiresMinutes = 30, bucketName 
     }
 
     if (!exists) {
-      return { success: false, url: null, error: `Output file missing before signing: attemptedPath=${normalized}` }
+      attempted.fileExists = false
+      return { success: false, url: null, error: `Output file missing before signing: attemptedPath=${normalized}`, debug: attempted }
     }
+    attempted.fileExists = true
 
     const expiresMs = Date.now() + (expiresMinutes || 30) * 60 * 1000
     const expires = new Date(expiresMs)
@@ -58,18 +60,20 @@ async function getSignedUrlDetailed(objectPath, expiresMinutes = 30, bucketName 
         const retryFile = useBucket.file(retryPath)
         const [retryExists] = await retryFile.exists()
         if (!retryExists) {
-          return { success: false, url: null, error: `Output file missing before signing on retry: ${retryPath}` }
+          attempted.fileExists = false
+          return { success: false, url: null, error: `Output file missing before signing on retry: ${retryPath}`, debug: attempted }
         }
+        attempted.fileExists = true
         const [url2] = await retryFile.getSignedUrl({ version: 'v4', action: 'read', expires })
-        return { success: true, url: url2, error: null }
+        return { success: true, url: url2, error: null, debug: attempted }
       } catch (err2) {
         const msg = err2 && err2.message ? err2.message : String(err2)
-        return { success: false, url: null, error: `Signing failed. attemptedPath=${attempted.path} exists=true bucket=${attempted.bucket} error=${msg}` }
+        return { success: false, url: null, error: `Signing failed. attemptedPath=${attempted.path} exists=true bucket=${attempted.bucket} error=${msg}`, debug: attempted }
       }
     }
   } catch (e) {
     const msg = e && e.message ? e.message : String(e)
-    return { success: false, url: null, error: `Signing failed pre-check: ${msg}` }
+    return { success: false, url: null, error: `Signing failed pre-check: ${msg}`, debug: attempted }
   }
 }
 
