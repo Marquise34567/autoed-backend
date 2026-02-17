@@ -134,10 +134,10 @@ async function workerLoop() {
         try {
           await processJob(jobId, inputSpec)
           log(jobId, 'processing finished')
-          try { await db.collection('jobs').doc(jobId).set({ status: 'completed', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }) } catch (er) { log(jobId, 'failed to mark completed', er) }
+          try { await db.collection('jobs').doc(jobId).update({ status: 'completed', progress: 100, updatedAt: admin.firestore.FieldValue.serverTimestamp() }) } catch (er) { log(jobId, 'failed to mark completed', er) }
         } catch (e) {
           log(jobId, 'processing error', e && (e.stack || e.message || e))
-          try { await db.collection('jobs').doc(jobId).set({ status: 'failed', progress: 0, error: e && (e.message || String(e)), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }) } catch (er) { log(jobId, 'failed to write error state', er) }
+          try { await db.collection('jobs').doc(jobId).update({ status: 'failed', progress: 0, error: e && (e.message || String(e)), updatedAt: admin.firestore.FieldValue.serverTimestamp() }) } catch (er) { log(jobId, 'failed to write error state', er) }
         } finally {
           activeJobs.delete(jobId)
         }
@@ -156,6 +156,10 @@ async function workerLoop() {
 
 function start() {
   if (!WORKER_ENABLED) return log(null, 'WORKER_ENABLED not true; skipping start')
+  if (!db) {
+    console.error('[worker] db missing')
+    process.exit(1)
+  }
   // check ffmpeg availability
   try {
     exec('ffmpeg -version', { timeout: 8000 }, (err, stdout, stderr) => {
