@@ -7,6 +7,11 @@ const { listQueued } = require('./queue')
 
 // `db` provided by services/firebaseAdmin
 
+if (!db) {
+  console.error('Firestore db is undefined')
+  process.exit(1)
+}
+
 const os = require('os')
 const POLL_MS = parseInt(process.env.WORKER_POLL_MS || '2000', 10)
 const CONCURRENCY = parseInt(process.env.WORKER_CONCURRENCY || '2', 10)
@@ -128,16 +133,42 @@ async function workerLoop() {
       const jobDoc = snap.exists ? snap.data() : null
       let inputSpec = (jobDoc && jobDoc.inputSpec) || jobDoc || null
 
+      // Immediately mark progress to ensure frontend sees work started
+      try {
+        await db.collection('jobs').doc(jobId).update({
+          progress: 10,
+          status: 'processing',
+          updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        })
+      } catch (e) {
+        log(jobId, 'failed to mark progress after claim', e && (e.message || e))
+      }
+
       // Start processing without blocking the loop (up to concurrency limit)
       const p = (async () => {
         log(jobId, 'input resolved, starting processJob')
         try {
-          await processJob(jobId, inputSpec)
-          log(jobId, 'processing finished')
-          try { await db.collection('jobs').doc(jobId).update({ status: 'completed', progress: 100, updatedAt: admin.firestore.FieldValue.serverTimestamp() }) } catch (er) { log(jobId, 'failed to mark completed', er) }
+          const result = await processJob(jobId, inputSpec)
+          log(jobId, 'processing finished', result)
+          try {
+            await db.collection('jobs').doc(jobId).update({
+              progress: 100,
+              status: 'completed',
+              resultUrl: (result && result.resultUrl) || null,
+              finalVideoPath: (result && result.finalVideoPath) || null,
+              updatedAt: admin.firestore.FieldValue.serverTimestamp()
+            })
+          } catch (er) { log(jobId, 'failed to mark completed', er) }
         } catch (e) {
           log(jobId, 'processing error', e && (e.stack || e.message || e))
-          try { await db.collection('jobs').doc(jobId).update({ status: 'failed', progress: 0, error: e && (e.message || String(e)), updatedAt: admin.firestore.FieldValue.serverTimestamp() }) } catch (er) { log(jobId, 'failed to write error state', er) }
+          try {
+            await db.collection('jobs').doc(jobId).update({
+              status: 'failed',
+              progress: 0,
+              error: e && (e.message || String(e)),
+              updatedAt: admin.firestore.FieldValue.serverTimestamp()
+            })
+          } catch (er) { log(jobId, 'failed to write error state', er) }
         } finally {
           activeJobs.delete(jobId)
         }

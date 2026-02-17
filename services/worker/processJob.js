@@ -138,6 +138,7 @@ async function processJob(jobId, inputSpec) {
   function log(event, ...args) { jlog(event, { args }) }
 
   jlog('process_start', { hasInputSpec: !!inputSpec })
+  console.log('[worker] Processing job:', jobId)
   try {
     if (!db) throw new Error('Firestore db not initialized')
 
@@ -691,12 +692,15 @@ async function processJob(jobId, inputSpec) {
     // Update job doc: include output path and optionally signed URL for download
     const jobUpdate = { status: 'completed', progress: 100, updatedAt: Date.now(), message: 'Completed' }
     if (resultUrl) jobUpdate.resultUrl = resultUrl
-      jlog('stage_finalize')
+    jlog('stage_finalize')
 
     if (outputUrl) jobUpdate.outputUrl = outputUrl
     jobUpdate.outputPath = destVideoPath
     await db.collection('jobs').doc(jobId).set(jobUpdate, { merge: true })
     jlog('job_db_updated', { resultPath: destResultPath, outputPath: destVideoPath })
+
+    // Return result info for worker to perform a final canonical update
+    return { resultUrl: resultUrl || outputUrl || null, finalVideoPath: destVideoPath || null }
 
     // cleanup
     try { fs.unlinkSync(localIn) } catch (e) {}
