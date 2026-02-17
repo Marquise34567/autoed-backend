@@ -36,18 +36,31 @@ export async function createJob(job: JobRecord) {
         ? job.objectPathOutput
         : null
   const base: JobRecord = {
+    // canonical fields expected by worker and front-end
+    jobId: job.id,
     id: job.id,
-    uid: job.uid,
-    phase: job.phase || 'UPLOADING',
-    overallProgress: typeof job.overallProgress === 'number' ? job.overallProgress : 0,
-    overallEtaSec: job.overallEtaSec ?? null,
-    message: job.message || 'Created',
-    createdAt: job.createdAt || now(),
-    updatedAt: now(),
-    objectPathOriginal: job.objectPathOriginal || null,
+    userId: job.uid || null,
+    fileName: job.fileName || job.objectPathOriginal || null,
+    inputPath: job.storagePath || job.objectPathOriginal || null,
+    createdAt: job.createdAt || new Date(),
+    updatedAt: job.updatedAt || new Date(),
+    // REQUIRED FOR WORKER
+    status: 'queued',
+    phase: 'QUEUED',
+    progress: {
+      overallProgress: typeof job.overallProgress === 'number' ? job.overallProgress : 0,
+      overallEtaSec: job.overallEtaSec ?? null,
+    },
+    heartbeat: {
+      seq: 0,
+      phase: 'QUEUED',
+      workerLastSeenAt: null,
+    },
+    // compatibility / other fields
     objectPathNormalized: job.objectPathNormalized || null,
     finalVideoPath,
-    error: job.error || null,
+    resultUrl: null,
+    error: null,
     logs: job.logs || [],
   }
   try {

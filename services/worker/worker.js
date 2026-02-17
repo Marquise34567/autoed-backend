@@ -50,7 +50,7 @@ async function claimOne() {
   if (!db) return null
   const workerId = process.env.RAILWAY_SERVICE_NAME || os.hostname()
   // Log scan intent
-  log(null, "scan: querying jobs where status=='queued' (with uppercase fallback)")
+  log(null, "scan: querying jobs where status=='queued'")
   // Watchdog: find stuck processing jobs older than threshold and mark failed
   try {
       function sanitizeStatus(s) {
@@ -72,11 +72,8 @@ async function claimOne() {
     }
   } catch (e) { log(null, 'watchdog error', e && (e.message || e)) }
   try {
-    // First try lowercase queued; if none, try legacy uppercase QUEUED
-    let q = await db.collection('jobs').where('status', '==', 'queued').limit(1).get()
-    if (q.empty) {
-      q = await db.collection('jobs').where('status', '==', 'QUEUED').limit(1).get()
-    }
+    // Query for lowercase queued only
+    const q = await db.collection('jobs').where('status', '==', 'queued').limit(1).get()
     if (q.empty) {
       log(null, 'scan result: 0 queued jobs')
       return null

@@ -696,23 +696,31 @@ async function processJob(jobId, inputSpec) {
     }
 
   // Update job doc: include output path and signed URLs for download if available
-  const jobUpdate = {
-      status: sanitizeStatus('completed'),
+  const jobUpdateBase = {
       progress: 100,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       message: 'Completed',
       resultUrl: outputUrl || resultUrl || null,
       finalVideoPath: destVideoPath || null,
-    // keep both legacy and explicit fields for compatibility
-    outputUrl: outputUrl || null,
-    outputPath: destVideoPath || null,
+      // keep both legacy and explicit fields for compatibility
+      outputUrl: outputUrl || null,
+      outputPath: destVideoPath || null,
     }
     jlog('stage_finalize')
-    await db.collection('jobs').doc(jobId).set(jobUpdate, { merge: true })
-    jlog('job_db_updated', { resultPath: destResultPath, outputPath: destVideoPath })
-
-    // Return result info for worker to perform a final canonical update
-    return { resultUrl: jobUpdate.resultUrl || null, finalVideoPath: jobUpdate.finalVideoPath || null }
+    // Only mark completed when we have a resultUrl. Otherwise mark failed.
+    if (jobUpdateBase.resultUrl) {
+      const jobUpdate = Object.assign({ status: sanitizeStatus('completed') }, jobUpdateBase)
+      await db.collection('jobs').doc(jobId).set(jobUpdate, { merge: true })
+      jlog('job_db_updated', { resultPath: destResultPath, outputPath: destVideoPath })
+      // Return result info for worker to perform a final canonical update
+      return { resultUrl: jobUpdate.resultUrl || null, finalVideoPath: jobUpdate.finalVideoPath || null }
+    } else {
+      const errMsg = 'Processing finished but no resultUrl generated'
+      const failedUpdate = Object.assign({ status: sanitizeStatus('failed'), progress: 0, error: errMsg, errorMessage: errMsg, message: errMsg, failedAt: admin.firestore.FieldValue.serverTimestamp() }, jobUpdateBase)
+      await db.collection('jobs').doc(jobId).set(failedUpdate, { merge: true })
+      jlog('job_db_updated_failed', { reason: errMsg, outputPath: destVideoPath })
+      return { resultUrl: null, finalVideoPath: null }
+    }
 
     // cleanup
     try { fs.unlinkSync(localIn) } catch (e) {}
