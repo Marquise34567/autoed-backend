@@ -59,9 +59,14 @@ router.get('/', async (req, res) => {
       if (db) {
         const snap = await db.collection('jobs').doc(qid).get()
         if (snap && snap.exists) {
-          let job = snap.data() || {}
-          console.log('[jobs] GET', qid, 'data:', job)
-          try { job = await attachSignedUrlsToJob(job, 30) } catch (e) {}
+            let job = snap.data() || {}
+            console.log('[jobs] GET', qid, 'data:', job)
+            // Only attach signed URLs for completed jobs that have a finalVideoPath
+            try {
+              if (String((job.status || job.phase || '')).toLowerCase() === 'completed' && job.finalVideoPath) {
+                job = await attachSignedUrlsToJob(job, 30)
+              }
+            } catch (e) {}
           // Normalize but return canonical fields explicitly to avoid HTTP codes leaking into `status`
           const norm = normalizeJobRecord(job)
           // Enforce: a job must not be considered completed without a resultUrl
@@ -108,7 +113,15 @@ router.get('/', async (req, res) => {
         const snaps = await db.collection('jobs').orderBy('createdAt', 'desc').limit(100).get()
       let arr = []
       snaps.forEach(s => arr.push(s.data()))
-      try { arr = await Promise.all(arr.map(j => attachSignedUrlsToJob(j, 30))) } catch (e) {}
+      // Only attach signed URLs for completed jobs with a finalVideoPath
+      try {
+        arr = await Promise.all(arr.map(async (j) => {
+          if (String((j.status || j.phase || '')).toLowerCase() === 'completed' && j.finalVideoPath) {
+            try { return await attachSignedUrlsToJob(j, 30) } catch (e) { return j }
+          }
+          return j
+        }))
+      } catch (e) {}
       arr = arr.map(normalizeJobRecord)
       return res.status(200).json({ ok: true, jobs: arr, queued: listQueued() })
     }
@@ -151,7 +164,11 @@ router.get('/:id', async (req, res) => {
         }
     }
     let job = jobs.get(id) || null
-    try { job = await attachSignedUrlsToJob(job, 30) } catch (e) {}
+    try {
+      if (job && String((job.status || job.phase || '')).toLowerCase() === 'completed' && job.finalVideoPath) {
+        job = await attachSignedUrlsToJob(job, 30)
+      }
+    } catch (e) {}
     job = normalizeJobRecord(job)
     const out = {
       id: job.id,
@@ -262,6 +279,7 @@ router.post('/', async (req, res) => {
         id: jobId,
         userId: userId,
         status: 'queued',
+        phase: 'QUEUED',
         progress: 0,
         createdAt: now,
         updatedAt: now,

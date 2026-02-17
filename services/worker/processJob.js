@@ -165,7 +165,7 @@ async function processJob(jobId, inputSpec) {
       try { await db.collection('jobs').doc(jobId).set(p, { merge: true }) } catch (e) { log('updateJobPatch failed', e && (e.message || e)) }
     }
 
-    await updateJobPatch({ status: sanitizeStatus('processing'), progress: clampProgress(5), message: 'Processing started', startedAt: admin.firestore.FieldValue.serverTimestamp(), lockedAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() })
+    await updateJobPatch({ status: sanitizeStatus('processing'), phase: 'PROCESSING', progress: clampProgress(5), message: 'Processing started', startedAt: admin.firestore.FieldValue.serverTimestamp(), lockedAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() })
 
     // Normalize inputSpec
     let downloadURL = null
@@ -683,6 +683,8 @@ async function processJob(jobId, inputSpec) {
     const destResultPath = `results/${jobId}/result.json`
     jlog('upload_result_json_start', { dest: destResultPath })
       jlog('stage_upload')
+    // mark uploading phase before the potentially-long upload
+    try { await updateJobPatch({ phase: 'UPLOADING', progress: clampProgress(95), message: 'Uploading results', updatedAt: admin.firestore.FieldValue.serverTimestamp() }) } catch (e) { jlog('failed_set_phase_uploading', { message: e && e.message }) }
 
     let resultUrl = null
     try {
@@ -726,14 +728,16 @@ async function processJob(jobId, inputSpec) {
     jlog('stage_finalize')
     // Only mark completed when we have a resultUrl. Otherwise mark failed.
     if (jobUpdateBase.resultUrl) {
-      const jobUpdate = Object.assign({ status: sanitizeStatus('completed') }, jobUpdateBase)
+      const jobUpdate = Object.assign({ status: sanitizeStatus('completed'), phase: 'COMPLETED' }, jobUpdateBase)
       await db.collection('jobs').doc(jobId).set(jobUpdate, { merge: true })
       jlog('job_db_updated', { resultPath: destResultPath, outputPath: destVideoPath })
+      // explicit log for worker visibility
+      console.log(`[worker] wrote resultPath ${destVideoPath} for ${jobId}`)
       // Return result info for worker to perform a final canonical update
       return { resultUrl: jobUpdate.resultUrl || null, finalVideoPath: jobUpdate.finalVideoPath || null }
     } else {
       const errMsg = 'Processing finished but no resultUrl generated'
-      const failedUpdate = Object.assign({ status: sanitizeStatus('failed'), progress: 0, error: errMsg, errorMessage: errMsg, message: errMsg, failedAt: admin.firestore.FieldValue.serverTimestamp() }, jobUpdateBase)
+      const failedUpdate = Object.assign({ status: sanitizeStatus('failed'), phase: 'FAILED', progress: 0, error: errMsg, errorMessage: errMsg, message: errMsg, failedAt: admin.firestore.FieldValue.serverTimestamp() }, jobUpdateBase)
       await db.collection('jobs').doc(jobId).set(failedUpdate, { merge: true })
       jlog('job_db_updated_failed', { reason: errMsg, outputPath: destVideoPath })
       return { resultUrl: null, finalVideoPath: null }

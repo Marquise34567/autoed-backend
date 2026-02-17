@@ -168,6 +168,7 @@ async function workerLoop() {
         continue
       }
       const jobId = claimed.id
+      log(jobId, `picked job ${jobId}`)
       // fetch latest data
       const snap = await db.collection('jobs').doc(jobId).get()
       const jobDoc = snap.exists ? snap.data() : null
@@ -178,6 +179,7 @@ async function workerLoop() {
         await db.collection('jobs').doc(jobId).update({
           progress: clampProgress(5),
           status: sanitizeStatus('processing'),
+          phase: 'PROCESSING',
           updatedAt: admin.firestore.FieldValue.serverTimestamp()
         })
       } catch (e) {
@@ -217,6 +219,7 @@ async function workerLoop() {
               try {
                 await db.collection('jobs').doc(jobId).update({
                   status: sanitizeStatus('failed') || 'failed',
+                  phase: 'FAILED',
                   progress: clampProgress(0),
                   errorMessage: 'Failed to generate signed download URL for output',
                   errorStack: null,
@@ -232,12 +235,14 @@ async function workerLoop() {
                 await db.collection('jobs').doc(jobId).update({
                   progress: clampProgress(100),
                   status: sanitizeStatus('completed'),
+                  phase: 'COMPLETED',
                   resultUrl: signedUrl,
                   finalVideoPath: gsPath || finalPath,
                   updatedAt: admin.firestore.FieldValue.serverTimestamp()
                 })
                 console.log(`[worker] uploaded: ${gsPath || finalPath}`)
                 console.log(`[worker] resultUrl: ${signedUrl}`)
+                console.log(`[worker] marked completed ${jobId}`)
               } catch (er) {
                 log(jobId, 'failed to mark completed after signed URL generation', er)
               }
