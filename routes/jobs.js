@@ -4,8 +4,7 @@ const router = express.Router()
 const fs = require('fs')
 const path = require('path')
 const { exec } = require('child_process')
-const admin = require('../services/firebaseAdmin')
-const db = (admin && admin.db) || (admin && typeof admin.firestore === 'function' ? admin.firestore() : null)
+const { admin, db } = require('../services/firebaseAdmin')
 const { getSignedUrlForPath, attachSignedUrlsToJob } = require('../utils/storageSignedUrl')
 const { processJob } = require('../services/worker/processJob')
 const { enqueue, reenqueue, listQueued } = require('../services/worker/queue')
@@ -316,6 +315,10 @@ router.post('/:id/retry', async (req, res) => {
 router.post('/', async (req, res) => {
   try {
     jlog('job_post_incoming')
+    if (!db || !admin) {
+      console.error('[jobs] firebaseAdmin missing', { hasDb: !!db, hasAdmin: !!admin })
+      return res.status(500).json({ ok: false, error: 'firebase_admin_missing' })
+    }
     // Log whether an Authorization header was provided (do not log token contents)
     try { console.log('[jobs] Authorization present:', !!req.headers && !!req.headers.authorization) } catch (e) {}
     const body = req.body || {}
