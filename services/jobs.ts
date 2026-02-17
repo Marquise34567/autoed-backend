@@ -38,6 +38,8 @@ export async function createJob(job: JobRecord) {
   const base: JobRecord = {
     id: job.id,
     uid: job.uid,
+    // canonical status used by worker scans
+    status: 'queued',
     phase: job.phase || 'UPLOADING',
     overallProgress: typeof job.overallProgress === 'number' ? job.overallProgress : 0,
     overallEtaSec: job.overallEtaSec ?? null,
