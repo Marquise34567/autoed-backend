@@ -167,26 +167,30 @@ async function processJob(jobId, inputSpec) {
 
     await updateJobPatch({ status: sanitizeStatus('processing'), phase: 'PROCESSING', progress: clampProgress(5), message: 'Processing started', startedAt: admin.firestore.FieldValue.serverTimestamp(), lockedAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() })
 
-    // Use `bucketPath` exactly from the Firestore job document.
-    // Do NOT reconstruct or prefer other fields — rely on the canonical `bucketPath` stored in the job.
+    // Resolve input path from job document with fallbacks
+    // priority: job.bucketPath -> job.input?.storagePath -> job.storagePath -> job.inputPath
     let storagePath = null
     let bucketName = process.env.FIREBASE_STORAGE_BUCKET || DEFAULT_BUCKET_NAME || null
+    let jobDoc = null
     try {
       const jobSnap = await db.collection('jobs').doc(jobId).get()
-      const jobDoc = jobSnap && jobSnap.exists ? jobSnap.data() : null
-      storagePath = jobDoc && jobDoc.bucketPath ? jobDoc.bucketPath : null
-      jlog('job_doc_bucketPath', { bucketPath: storagePath })
+      jobDoc = jobSnap && jobSnap.exists ? jobSnap.data() : null
+      storagePath = jobDoc && (jobDoc.bucketPath || (jobDoc.input && jobDoc.input.storagePath) || jobDoc.storagePath || jobDoc.inputPath) ? (jobDoc.bucketPath || (jobDoc.input && jobDoc.input.storagePath) || jobDoc.storagePath || jobDoc.inputPath) : null
+      jlog('job_doc_input_resolution', { bucketPath: jobDoc && jobDoc.bucketPath || null, input_storagePath: jobDoc && jobDoc.input && jobDoc.input.storagePath || null, inputPath: jobDoc && jobDoc.inputPath || null })
     } catch (e) {
       throw new Error('Failed to read job document: ' + (e && e.message))
     }
 
     if (!storagePath) {
-      throw new Error('Missing bucketPath in job document')
+      throw new Error('Missing input path (bucketPath/input.storagePath/inputPath) in job document')
     }
 
-    // Log normalized input source (use explicit bucket)
-    jlog('normalized_input', { bucketName, storagePath })
-    try { console.log('[worker] Worker reading input from:', bucketName, storagePath) } catch (e) {}
+    // build canonical gsUri for logging/consumption
+    const inputGsUri = (jobDoc && jobDoc.input && jobDoc.input.gsUri) || (bucketName && storagePath ? `gs://${bucketName}/${storagePath}` : null)
+
+    // Log normalized input source
+    jlog('normalized_input', { bucketName, storagePath, inputGsUri })
+    try { console.log('[worker] Worker reading input from:', bucketName, storagePath, inputGsUri) } catch (e) {}
 
     // Prepare tmp
     const tmpDir = path.resolve(os.tmpdir(), 'autoed', 'uploads')
@@ -703,8 +707,9 @@ async function processJob(jobId, inputSpec) {
       console.warn(`[worker:${jobId}] failed to upload result.json`, e && (e.message || e))
     }
 
-    // If a local output file exists, upload it to outputs/<jobId>.mp4
-    const outputPath = `outputs/${jobId}.mp4`
+    // If a local output file exists, upload it to outputs/<userId>/<jobId>.mp4
+    const userIdForPath = (jobDoc && jobDoc.userId) ? String(jobDoc.userId) : 'anonymous'
+    const outputPath = `outputs/${userIdForPath}/${jobId}.mp4`
     let outputUrl = null
     let uploaded = false
     try {
@@ -757,12 +762,12 @@ async function processJob(jobId, inputSpec) {
     jlog('stage_finalize')
     // Mark completed when the output was uploaded (preferred) or when a small result.json exists.
     if (uploaded || jobUpdateBase.resultUrl) {
-      const jobUpdate = Object.assign({ status: sanitizeStatus('completed'), phase: 'COMPLETED' }, jobUpdateBase)
+      const jobUpdate = Object.assign({ status: 'succeeded', phase: 'DONE' }, jobUpdateBase)
       try {
         await db.collection('jobs').doc(jobId).set(jobUpdate, { merge: true })
         jlog('job_db_updated', { resultPath: outputPath, outputPath: outputPath, uploaded })
         console.log(`[worker] wrote resultPath ${outputPath} for ${jobId}`)
-        console.log('[worker] marked completed', jobId)
+        console.log('[worker] marked succeeded', jobId)
       } catch (e) {
         jlog('job_db_update_failed', { error: e && e.message })
       }

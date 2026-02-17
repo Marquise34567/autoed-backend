@@ -71,12 +71,21 @@ router.get('/', async (req, res) => {
             } catch (e) { console.warn('[jobs] failed to mark legacy completed job as failed', e && (e.stack || e.message || e)) }
             return res.status(200).json({ ok: true, jobId: norm.id || qid, status: 'failed', progress: 100, resultUrl: null, finalVideoPath: null, errorMessage: 'Legacy job missing resultUrl', updatedAt: norm.updatedAt || null })
           }
+          // If job succeeded and has an outputPath, attach a signed download URL
+          let downloadUrl = null
+          const possibleOutput = (job && (job.outputPath || job.finalVideoPath || job.resultPath)) || null
+          try {
+            if (norm.status === 'succeeded' && possibleOutput) {
+              downloadUrl = await getSignedUrlForPath(possibleOutput, 60)
+            }
+          } catch (e) { console.warn('[jobs] failed to generate signed URL for job GET', e && (e.message || e)) }
+
           const out = {
             ok: true,
             jobId: norm.id || qid,
             status: norm.status || 'queued',
             progress: Number.isFinite(Number(norm.progress)) ? Number(norm.progress) : null,
-            resultUrl: norm.resultUrl || null,
+            resultUrl: downloadUrl || norm.resultUrl || null,
             finalVideoPath: norm.finalVideoPath || null,
             errorMessage: norm.errorMessage || norm.error || null,
             error: norm.errorMessage || norm.error || null,
@@ -140,12 +149,20 @@ router.get('/:id', async (req, res) => {
             return res.status(200).json({ ok: true, job: outFail })
           }
           // Return a consistent, minimal job view for frontend
+          let downloadUrl = null
+          const possibleOutput = job && (job.outputPath || job.finalVideoPath || job.resultPath) || null
+          try {
+            if (job.status === 'succeeded' && possibleOutput) {
+              downloadUrl = await getSignedUrlForPath(possibleOutput, 60)
+            }
+          } catch (e) { console.warn('[jobs] failed to generate signed URL for job GET/:id', e && (e.message || e)) }
+
           const out = {
             id: job.id,
             status: job.status,
             progress: job.progress,
             errorMessage: job.errorMessage || null,
-            resultUrl: job.resultUrl || job.outputUrl || null
+            resultUrl: downloadUrl || job.resultUrl || job.outputUrl || null
           }
           return res.status(200).json({ ok: true, job: out })
         }
@@ -274,10 +291,19 @@ router.post('/', async (req, res) => {
   try {
     jlog('job_post_incoming')
 
-    // Basic user validation: require an Authorization header or explicit userId in body
+    // Basic user validation: prefer explicit userId in body, otherwise verify Bearer token to extract Firebase UID
     const body = req.body || {}
     const authHeader = req.headers && req.headers.authorization
-    const userId = body.userId || (authHeader ? String(authHeader).slice(0, 256) : null)
+    let userId = body.userId || null
+    if (!userId && authHeader && typeof authHeader === 'string' && authHeader.toLowerCase().startsWith('bearer ')) {
+      const token = authHeader.split(' ')[1]
+      try {
+        const decoded = await admin.auth().verifyIdToken(token)
+        userId = decoded && decoded.uid ? decoded.uid : null
+      } catch (e) {
+        console.warn('[jobs] failed to verify id token', e && e.message || e)
+      }
+    }
     if (!userId) return res.status(401).json({ ok: false, error: 'missing_user' })
 
     if (!db || !admin) {
@@ -310,9 +336,15 @@ router.post('/', async (req, res) => {
         progress: 0,
         createdAt: now,
         updatedAt: now,
-        inputPath: storagePath,
+        // canonical input fields for worker
         bucketPath: storagePath,
+        inputPath: storagePath,
         input: inputSpec,
+        // placeholders for outputs
+        outputPath: null,
+        resultUrl: null,
+        error: null,
+        message: null,
       }, { merge: true })
     } catch (err) {
       console.error('[jobs] JOB_PERSIST_ERROR', err && (err.stack || err.message || err))
