@@ -5,6 +5,7 @@ const { processJob } = require('./processJob')
 const fs = require('fs')
 const path = require('path')
 const { listQueued } = require('./queue')
+const { getSignedUrlForPath } = require('../../utils/storageSignedUrl')
 
 // `db` provided by services/firebaseAdmin
 
@@ -158,13 +159,27 @@ async function workerLoop() {
           const result = await processJob(jobId, inputSpec)
           log(jobId, 'processing finished', result)
           try {
+            // Prefer finalVideoPath -> generate signed URL for client download
+            const finalPath = (result && result.finalVideoPath) || null
+            let signedUrl = (result && result.resultUrl) || null
+            if (!signedUrl && finalPath) {
+              try {
+                signedUrl = await getSignedUrlForPath(finalPath, 60)
+              } catch (errUrl) {
+                log(jobId, 'failed to generate signed URL for finalVideoPath', errUrl && (errUrl.message || errUrl))
+                signedUrl = null
+              }
+            }
+
             await db.collection('jobs').doc(jobId).update({
               progress: 100,
               status: sanitizeStatus('completed'),
-              resultUrl: (result && result.resultUrl) || null,
-              finalVideoPath: (result && result.finalVideoPath) || null,
+              resultUrl: signedUrl || null,
+              finalVideoPath: finalPath || null,
               updatedAt: admin.firestore.FieldValue.serverTimestamp()
             })
+            // Confirm write for debugging
+            console.log(`[worker] ${jobId} -> wrote completed status; resultUrl=${!!signedUrl} finalVideoPath=${finalPath || '<none>'}`)
           } catch (er) { log(jobId, 'failed to mark completed', er) }
         } catch (e) {
           log(jobId, 'processing error', e && (e.stack || e.message || e))
