@@ -739,7 +739,13 @@ async function processJob(jobId, inputSpec) {
         if (!exists) throw new Error('Output upload failed: object not found after upload')
         uploaded = true
         try {
-          outputUrl = await getSignedUrlForPath(outputPath, 60)
+          const { getSignedUrlDetailed } = require('../../utils/storageSignedUrl')
+          const signRes = await getSignedUrlDetailed(outputPath, 60)
+          if (signRes && signRes.success) outputUrl = signRes.url
+          else {
+            console.warn('[worker] failed to generate signed URL for video (signing error)', signRes && signRes.error)
+            outputUrl = null
+          }
         } catch (err) {
           // Signing failure should NOT cause the job to be marked failed — keep upload path and mark completed.
           console.warn('[worker] failed to generate signed URL for video (signing error)', err && (err.message || err))

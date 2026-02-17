@@ -8,17 +8,76 @@ function getBucketObj(name) {
   return admin.storage().bucket()
 }
 
+function _normalizePath(p) {
+  if (!p || typeof p !== 'string') return ''
+  let s = p.trim()
+  s = s.replace(/^gs:\/\/[\w.-]+\//i, '')
+  s = s.replace(/^\/+/, '')
+  s = s.replace(/\/+/g, '/')
+  return s
+}
+
+async function getSignedUrlDetailed(objectPath, expiresMinutes = 30, bucketName = null) {
+  const attempted = { path: objectPath }
+  try {
+    const normalized = _normalizePath(objectPath)
+    if (!normalized) return { success: false, url: null, error: 'Output file missing before signing' }
+
+    const useBucket = bucketName ? admin.storage().bucket(bucketName) : getBucketObj()
+    const resolvedBucketName = (useBucket && useBucket.name) ? useBucket.name : (bucketName || DEFAULT_BUCKET_NAME || null)
+    attempted.bucket = resolvedBucketName
+
+    const file = useBucket.file(normalized)
+    let [exists] = await file.exists()
+    if (!exists) {
+      const alt = normalized.replace(/(^|\/)\.+(\/|$)/g, '/')
+      if (alt !== normalized) {
+        const altFile = useBucket.file(alt)
+        const [altExists] = await altFile.exists()
+        if (altExists) {
+          attempted.path = alt
+          exists = true
+        }
+      }
+    }
+
+    if (!exists) {
+      return { success: false, url: null, error: `Output file missing before signing: attemptedPath=${normalized}` }
+    }
+
+    const expiresMs = Date.now() + (expiresMinutes || 30) * 60 * 1000
+    const expires = new Date(expiresMs)
+
+    try {
+      const [url] = await file.getSignedUrl({ version: 'v4', action: 'read', expires })
+      return { success: true, url, error: null }
+    } catch (err) {
+      try {
+        const retryPath = encodeURI(normalized)
+        attempted.path = retryPath
+        const retryFile = useBucket.file(retryPath)
+        const [retryExists] = await retryFile.exists()
+        if (!retryExists) {
+          return { success: false, url: null, error: `Output file missing before signing on retry: ${retryPath}` }
+        }
+        const [url2] = await retryFile.getSignedUrl({ version: 'v4', action: 'read', expires })
+        return { success: true, url: url2, error: null }
+      } catch (err2) {
+        const msg = err2 && err2.message ? err2.message : String(err2)
+        return { success: false, url: null, error: `Signing failed. attemptedPath=${attempted.path} exists=true bucket=${attempted.bucket} error=${msg}` }
+      }
+    }
+  } catch (e) {
+    const msg = e && e.message ? e.message : String(e)
+    return { success: false, url: null, error: `Signing failed pre-check: ${msg}` }
+  }
+}
+
 async function getSignedUrlForPath(objectPath, expiresMinutes = 30, bucketName = null) {
-  if (!objectPath) throw new Error('Missing objectPath')
-  // allow explicit bucketName override
-  const useBucket = bucketName ? admin.storage().bucket(bucketName) : getBucketObj()
-  const file = useBucket.file(objectPath)
-  const [exists] = await file.exists()
-  if (!exists) throw new Error('Storage object not found: ' + (bucketName ? `${bucketName}/${objectPath}` : objectPath))
-  const expiresMs = Date.now() + (expiresMinutes || 30) * 60 * 1000
-  const expires = new Date(expiresMs)
-  const [url] = await file.getSignedUrl({ version: 'v4', action: 'read', expires })
-  return url
+  const res = await getSignedUrlDetailed(objectPath, expiresMinutes, bucketName)
+  if (res.success) return res.url
+  const err = new Error(res.error || 'failed_to_generate_signed_url')
+  throw err
 }
 
 function _extractPathFromStorageUrl(url) {
@@ -133,4 +192,4 @@ async function attachSignedUrlsToJob(job, expiresMinutes = 30) {
   return cloned
 }
 
-module.exports = { getSignedUrlForPath, attachSignedUrlsToJob }
+module.exports = { getSignedUrlForPath, getSignedUrlDetailed, attachSignedUrlsToJob }
