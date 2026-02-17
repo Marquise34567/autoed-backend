@@ -167,45 +167,26 @@ async function processJob(jobId, inputSpec) {
 
     await updateJobPatch({ status: sanitizeStatus('processing'), phase: 'PROCESSING', progress: clampProgress(5), message: 'Processing started', startedAt: admin.firestore.FieldValue.serverTimestamp(), lockedAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() })
 
-    // Normalize inputSpec into a consistent inputSource
-    let downloadURL = null
-    let gsUri = null
+    // Use `bucketPath` exactly from the Firestore job document.
+    // Do NOT reconstruct or prefer other fields — rely on the canonical `bucketPath` stored in the job.
     let storagePath = null
-    let bucketName = null
-
-    // inputSpec may be the whole job doc or an inputSpec object
-    jlog('input_fields', { inputSpecKeys: inputSpec && typeof inputSpec === 'object' ? Object.keys(inputSpec) : null })
-    if (typeof inputSpec === 'string') {
-      // treat as gsUri
-      gsUri = inputSpec
-    } else if (inputSpec && typeof inputSpec === 'object') {
-      // accept nested `input` object or top-level fields
-      const inObj = inputSpec.input && typeof inputSpec.input === 'object' ? inputSpec.input : inputSpec
-      downloadURL = inObj.downloadURL || inObj.downloadUrl || inObj.download || inputSpec.downloadURL || inputSpec.downloadUrl || null
-      storagePath = inObj.storagePath || inObj.storage_path || inputSpec.storagePath || inputSpec.storage_path || null
-      gsUri = inObj.gsUri || inObj.gs_uri || inputSpec.gsUri || inputSpec.gs_uri || null
-      bucketName = inObj.bucket || inObj.storageBucket || inObj.bucketName || inputSpec.bucket || inputSpec.storageBucket || null
+    let bucketName = process.env.FIREBASE_STORAGE_BUCKET || DEFAULT_BUCKET_NAME || null
+    try {
+      const jobSnap = await db.collection('jobs').doc(jobId).get()
+      const jobDoc = jobSnap && jobSnap.exists ? jobSnap.data() : null
+      storagePath = jobDoc && jobDoc.bucketPath ? jobDoc.bucketPath : null
+      jlog('job_doc_bucketPath', { bucketPath: storagePath })
+    } catch (e) {
+      throw new Error('Failed to read job document: ' + (e && e.message))
     }
 
-    // If gsUri provided but storagePath missing, attempt to parse storagePath and bucket
-    if (gsUri && (!storagePath || storagePath === '')) {
-      if (gsUri.startsWith && gsUri.startsWith('gs://')) {
-        const without = gsUri.replace(/^gs:\/\//i, '')
-        const idx = without.indexOf('/')
-        if (idx > 0) {
-          const parsedBucket = without.slice(0, idx)
-          const parsedPath = without.slice(idx + 1)
-          if (!bucketName) bucketName = parsedBucket
-          if (!storagePath) storagePath = parsedPath
-        }
-      }
+    if (!storagePath) {
+      throw new Error('Missing bucketPath in job document')
     }
 
-    // Fallback bucket: env or default
-    if (!bucketName) bucketName = process.env.FIREBASE_STORAGE_BUCKET || DEFAULT_BUCKET_NAME || null
-
-    // Log normalized input source
-    jlog('normalized_input', { bucketName, storagePath, gsUri, downloadURL })
+    // Log normalized input source (use explicit bucket)
+    jlog('normalized_input', { bucketName, storagePath })
+    try { console.log('[worker] Worker reading input from:', bucketName, storagePath) } catch (e) {}
 
     // Prepare tmp
     const tmpDir = path.resolve(os.tmpdir(), 'autoed', 'uploads')
