@@ -718,14 +718,8 @@ async function processJob(jobId, inputSpec) {
       console.warn(`[worker:${jobId}] failed to upload result.json`, e && (e.message || e))
     }
 
-<<<<<<< HEAD
-    // If a local output file exists, upload it to outputs/<uid>/<jobId>.mp4
-    const outputPath = `outputs/${uid}/${jobId}.mp4`
-=======
-    // If a local output file exists, upload it to outputs/<uid>/<jobId>.mp4
-    const uid = (jobDoc && jobDoc.userId) ? String(jobDoc.userId) : (jobDoc && jobDoc.user && jobDoc.user.id ? String(jobDoc.user.id) : 'unknown')
-    const outputPath = `outputs/${uid}/${jobId}.mp4`
->>>>>>> origin/main
+  // If a local output file exists, upload it to outputs/<uid>/<jobId>.mp4
+  const outputPath = `outputs/${uid}/${jobId}.mp4`
     let outputUrl = null
     let uploaded = false
     try {
