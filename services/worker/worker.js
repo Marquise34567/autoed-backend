@@ -159,10 +159,12 @@ async function workerLoop() {
           const result = await processJob(jobId, inputSpec)
           log(jobId, 'processing finished', result)
           try {
-            // Prefer finalVideoPath -> generate signed URL for client download
+            // Prefer finalVideoPath -> require a downloadable signed URL before marking completed
             const finalPath = (result && result.finalVideoPath) || null
             let signedUrl = (result && result.resultUrl) || null
-            if (!signedUrl && finalPath) {
+
+            // If we have a final path but no signed URL, try to generate one
+            if (finalPath && !signedUrl) {
               try {
                 signedUrl = await getSignedUrlForPath(finalPath, 60)
               } catch (errUrl) {
@@ -171,15 +173,44 @@ async function workerLoop() {
               }
             }
 
-            await db.collection('jobs').doc(jobId).update({
-              progress: 100,
-              status: sanitizeStatus('completed'),
-              resultUrl: signedUrl || null,
-              finalVideoPath: finalPath || null,
-              updatedAt: admin.firestore.FieldValue.serverTimestamp()
-            })
-            // Confirm write for debugging
-            console.log(`[worker] ${jobId} -> wrote completed status; resultUrl=${!!signedUrl} finalVideoPath=${finalPath || '<none>'}`)
+            // Compute GS path for debugging if possible
+            let gsPath = null
+            try {
+              const bucketName = (admin && typeof admin.getBucketName === 'function') ? admin.getBucketName() : (process.env.FIREBASE_STORAGE_BUCKET || null)
+              if (finalPath) {
+                gsPath = finalPath.startsWith('gs://') ? finalPath : (bucketName ? `gs://${bucketName}/${finalPath.replace(/^\/+/, '')}` : finalPath)
+              }
+            } catch (e) { gsPath = finalPath }
+
+            if (!signedUrl) {
+              // If we couldn't obtain a signed URL, mark job failed (do not mark completed)
+              try {
+                await db.collection('jobs').doc(jobId).update({
+                  status: sanitizeStatus('failed') || 'failed',
+                  progress: 0,
+                  errorMessage: 'Failed to generate signed download URL for output',
+                  updatedAt: admin.firestore.FieldValue.serverTimestamp()
+                })
+                console.error(`[worker] ${jobId} -> failed to write resultUrl; marked failed`)
+              } catch (er) {
+                log(jobId, 'failed to write failure state after missing signed URL', er)
+              }
+            } else {
+              // Write canonical completed state including https resultUrl and gs path for debugging
+              try {
+                await db.collection('jobs').doc(jobId).update({
+                  progress: 100,
+                  status: sanitizeStatus('completed'),
+                  resultUrl: signedUrl,
+                  finalVideoPath: gsPath || finalPath,
+                  updatedAt: admin.firestore.FieldValue.serverTimestamp()
+                })
+                console.log(`[worker] uploaded: ${gsPath || finalPath}`)
+                console.log(`[worker] resultUrl: ${signedUrl}`)
+              } catch (er) {
+                log(jobId, 'failed to mark completed after signed URL generation', er)
+              }
+            }
           } catch (er) { log(jobId, 'failed to mark completed', er) }
         } catch (e) {
           log(jobId, 'processing error', e && (e.stack || e.message || e))
