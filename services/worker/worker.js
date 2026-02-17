@@ -168,7 +168,6 @@ async function workerLoop() {
             const finalPath = (result && result.finalVideoPath) || null
             let signedUrl = (result && result.resultUrl) || null
 
-            // If we have a final path but no signed URL, try to generate one
             if (finalPath && !signedUrl) {
               try {
                 signedUrl = await getSignedUrlForPath(finalPath, 60)
@@ -177,11 +176,7 @@ async function workerLoop() {
                 signedUrl = null
               }
             }
-
-<<<<<<< HEAD
-=======
             // Compute GS path for debugging if possible
->>>>>>> 7c31d6bcf4c741036562bcdd56b8fe424bc52dea
             let gsPath = null
             try {
               const bucketName = (admin && typeof admin.getBucketName === 'function') ? admin.getBucketName() : (process.env.FIREBASE_STORAGE_BUCKET || null)
