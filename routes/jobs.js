@@ -178,10 +178,11 @@ router.get('/:id/download', async (req, res) => {
   try {
     // Determine expected output path from job doc or guess
     let filePath = null
+    let job = null
     if (db) {
       const snap = await db.collection('jobs').doc(id).get()
       if (snap && snap.exists) {
-        const job = snap.data()
+        job = snap.data()
         filePath = job && (job.outputPath || job.outputFile || job.finalVideoPath || null)
       }
     }
