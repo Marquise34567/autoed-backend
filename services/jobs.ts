@@ -42,8 +42,8 @@ export async function createJob(job: JobRecord) {
     userId: job.uid || null,
     fileName: job.fileName || job.objectPathOriginal || null,
     inputPath: job.storagePath || job.objectPathOriginal || null,
-    createdAt: job.createdAt || new Date(),
-    updatedAt: job.updatedAt || new Date(),
+    createdAt: typeof job.createdAt === 'number' ? job.createdAt : Date.now(),
+    updatedAt: typeof job.updatedAt === 'number' ? job.updatedAt : Date.now(),
     // REQUIRED FOR WORKER
     status: 'queued',
     phase: 'QUEUED',
@@ -264,13 +264,13 @@ function sanitizeJobPatch(patch: Partial<JobRecord>) {
   if ('objectPathOutput' in (next as any)) delete (next as any).objectPathOutput
   // Normalize progress: convert fractions (0..1) to 0..100 and clamp
   if (typeof next.progress !== 'undefined') {
-    let p = Number((next as any).progress)
-    if (Number.isFinite(p)) {
+    let p: any = parseFloat(String((next as any).progress));
+    if (isFinite(p)) {
       // if fraction between 0 and 1, scale
-      if (p > 0 && p <= 1) p = Math.round(p * 100)
-      if (p < 0) p = 0
-      if (p > 100) p = 100
-      (next as any).progress = Math.round(p)
+      if (p > 0 && p <= 1) p = Math.round(p * 100);
+      if (p < 0) p = 0;
+      if (p > 100) p = 100;
+      (next as any).progress = Math.round(p);
     } else {
       delete (next as any).progress
     }

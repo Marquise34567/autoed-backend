@@ -284,7 +284,7 @@ export async function POST(request: Request) {
     }
 
     console.log("[analyze] All pre-flight checks passed, creating job...");
-    const job = createJob({
+    const job = await createJob({
       id: jobId,
       filePath: inputPath,
       createdAt: Date.now(),

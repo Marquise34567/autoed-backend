@@ -14,7 +14,8 @@ const stripeKey = process.env.STRIPE_SECRET_KEY;
 let stripe: Stripe | null = null;
 if (stripeKey && stripeKey.startsWith('sk_')) {
   try {
-    stripe = new Stripe(stripeKey, { apiVersion: '2024-06-20' });
+    // cast apiVersion to any to satisfy TypeScript union of literal API versions
+    stripe = new Stripe(stripeKey, { apiVersion: '2024-06-20' } as any);
     console.log('✅ Stripe initialized');
   } catch (e) {
     console.warn('⚠️ Failed to initialize Stripe:', e);
@@ -57,7 +58,7 @@ export function getStripe(): Stripe {
   if (!apiKey || !apiKey.startsWith('sk_')) {
     throw new Error('STRIPE_SECRET_KEY is not configured or invalid');
   }
-  stripeInstance = new Stripe(apiKey, { apiVersion: '2024-06-20' });
+  stripeInstance = new Stripe(apiKey, { apiVersion: '2024-06-20' } as any);
   return stripeInstance;
 }
 

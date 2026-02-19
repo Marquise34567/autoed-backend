@@ -56,7 +56,7 @@ export async function middleware(request: NextRequest) {
       loginUrl.searchParams.set('next', pathname)
       console.log('[middleware] redirecting unauthenticated to', loginUrl.toString())
       return supaResponse
-        ? supaResponse.redirect(loginUrl)
+        ? (supaResponse as any).redirect(loginUrl)
         : NextResponse.redirect(loginUrl)
     }
 
@@ -112,7 +112,7 @@ export async function middleware(request: NextRequest) {
     const next = loginUrl.searchParams.get('next') || '/editor'
     console.log('[middleware] authenticated user accessing /login — redirecting to', next)
     const dest = new URL(next, request.url)
-    return supaResponse ? supaResponse.redirect(dest) : NextResponse.redirect(dest)
+    return supaResponse ? (supaResponse as any).redirect(dest) : NextResponse.redirect(dest)
   }
 
   // Return the mutated Supabase response so cookie updates persist

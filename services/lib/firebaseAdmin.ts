@@ -51,3 +51,6 @@ export function getBucket(name?: string) {
 export { getBucketName }
 
 export default admin
+
+// Indicate whether admin SDK was initialized
+export const isAdminInitialized = !!admin.apps.length

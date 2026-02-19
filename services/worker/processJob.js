@@ -167,14 +167,15 @@ async function processJob(jobId, inputSpec) {
 
     await updateJobPatch({ status: sanitizeStatus('processing'), phase: 'PROCESSING', progress: clampProgress(5), message: 'Processing started', startedAt: admin.firestore.FieldValue.serverTimestamp(), lockedAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() })
 
-    // Read job doc and resolve input path with fallbacks
+
+    // Read job doc and resolve input path with fallbacks (prefer canonical `inputPath`)
     let storagePath = null
     let bucketName = process.env.FIREBASE_STORAGE_BUCKET || DEFAULT_BUCKET_NAME || null
     let jobDoc = null
     try {
       const jobSnap = await db.collection('jobs').doc(jobId).get()
       jobDoc = jobSnap && jobSnap.exists ? jobSnap.data() : null
-      // resolve input path priority: inputPath -> bucketPath -> input.storagePath -> input.bucketPath
+      // Prefer `inputPath` as canonical; accept older fields as fallback
       const resolved = jobDoc && (jobDoc.inputPath || jobDoc.bucketPath || (jobDoc.input && jobDoc.input.storagePath) || (jobDoc.input && jobDoc.input.bucketPath))
       storagePath = resolved || null
       jlog('job_doc_input_resolution', { inputPath: jobDoc && jobDoc.inputPath || null, bucketPath: jobDoc && jobDoc.bucketPath || null, input_storagePath: jobDoc && jobDoc.input && jobDoc.input.storagePath || null })
@@ -189,6 +190,16 @@ async function processJob(jobId, inputSpec) {
     // Build canonical gsUri when possible and derive downloadURL if present
     const downloadURL = (jobDoc && jobDoc.input && jobDoc.input.downloadURL) || (jobDoc && jobDoc.downloadURL) || (inputSpec && inputSpec.downloadURL) || null
     const inputGsUri = (jobDoc && jobDoc.input && jobDoc.input.gsUri) || (bucketName && storagePath ? `gs://${bucketName}/${storagePath}` : null)
+
+    // Compute and persist outputPath early so it's never null when signing
+    const uid = (jobDoc && (jobDoc.userId || jobDoc.uid)) || 'unknown'
+    const outputPath = `outputs/${uid}/${jobId}.mp4`
+    try {
+      await updateJobPatch({ outputPath })
+      jlog('persisted_outputPath', { outputPath })
+    } catch (e) {
+      console.warn('[worker] failed to persist outputPath early', e && (e.message || e))
+    }
 
     // Log normalized input source
     jlog('normalized_input', { bucketName, storagePath, inputGsUri })
@@ -265,7 +276,7 @@ async function processJob(jobId, inputSpec) {
 
     if (!downloaded) {
       // Provide clear diagnostics on why download failed
-      const present = { storagePath: !!storagePath, gsUri: !!gsUri, downloadURL: !!downloadURL, bucketName: !!bucketName }
+      const present = { storagePath: !!storagePath, inputGsUri: !!inputGsUri, downloadURL: !!downloadURL, bucketName: !!bucketName }
       throw new Error('No input source provided or download failed. Present fields: ' + JSON.stringify(present))
     }
 
@@ -731,11 +742,23 @@ async function processJob(jobId, inputSpec) {
         if (!exists) throw new Error('Output upload failed: object not found after upload')
         uploaded = true
         try {
-          outputUrl = await getSignedUrlForPath(outputPath, 60)
+          // Use detailed signing which verifies existence and returns structured info
+          const { getSignedUrlDetailed } = require('../../utils/storageSignedUrl')
+          const signRes = await getSignedUrlDetailed(outputPath, 60)
+          if (signRes && signRes.success) {
+            outputUrl = signRes.url
+          } else {
+            // Log and surface the signing diagnostics; do not swallow the error
+            console.warn('[worker] signing failed for output', { jobId, outputPath, signing: signRes })
+            outputUrl = null
+            // attach signing debug into job doc so callers can inspect it
+            try { await updateJobPatch({ signingError: signRes && signRes.error || null, signingDebug: signRes && signRes.debug || null }) } catch (ee) {}
+          }
         } catch (err) {
           // Signing failure should NOT cause the job to be marked failed — keep upload path and mark completed.
-          console.warn('[worker] failed to generate signed URL for video (signing error)', err && (err.message || err))
+          console.warn('[worker] failed to generate signed URL for video (exception)', err && (err.message || err))
           outputUrl = null
+          try { await updateJobPatch({ signingError: err && (err.message || String(err)), signingDebug: null }) } catch (ee) {}
         }
       } else {
         console.warn(`[worker:${jobId}] no local output file found at ${localOut}; skipping video upload`)
