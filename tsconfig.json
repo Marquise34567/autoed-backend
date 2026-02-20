@@ -3,11 +3,18 @@
     "target": "ES2020",
     "module": "CommonJS",
     "outDir": "dist",
-    "rootDir": "src",
+    "rootDir": ".",
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./*"],
+      "@/lib/*": ["services/lib/*", "autoed-backend-ready/services/lib/*", "services/*"],
+      "@supabase/ssr": ["services/lib/supabase/ssr.ts"],
+      "@supabase/*": ["services/lib/supabase/*"]
+    },
     "esModuleInterop": true,
     "moduleResolution": "node",
     "skipLibCheck": true,
     "strict": false
   },
-  "include": ["src/**/*", "services/**/*", "routes/**/*", "routes/**/**/*.ts"]
+  "include": ["services/**/*", "index.ts", "index.js", "worker.js"]
 }

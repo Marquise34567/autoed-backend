@@ -165,7 +165,7 @@ export function serverIncrementRenderUsage(userId: string = DEMO_USER_ID): UserP
 function getDefaultPlanUsage(): UserPlanUsage {
   return {
     userId: DEMO_USER_ID,
-    planId: PLAN_IDS.FREE,
+    planId: 'free' as PlanId,
     rendersUsedThisMonth: 0,
     monthStartDate: new Date().toISOString(),
   };

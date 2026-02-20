@@ -57,7 +57,7 @@ export async function getUserIdByEmail(email: string): Promise<string | null> {
       return null;
     }
 
-    const user = data.users.find(u => u.email === email);
+    const user = (data as any).users.find((u: any) => u.email === email);
     return user?.id || null;
   } catch (err) {
     console.error('User lookup failed:', err);

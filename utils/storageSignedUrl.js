@@ -101,14 +101,16 @@ async function attachSignedUrlsToJob(job, expiresMinutes = 30) {
   const cloned = Object.assign({}, job)
   const bucket = getBucketObj()
 
-  try {
+    try {
     // resultUrl (common case for small JSON result)
     if (!cloned.resultUrl) {
       const guess = `results/${cloned.id}/result.json`
       const f = bucket.file(guess)
       const [exists] = await f.exists()
       if (exists) {
-        cloned.resultUrl = await getSignedUrlForPath(guess, expiresMinutes)
+        const out = await getSignedUrlDetailed(guess, expiresMinutes)
+        if (out.success) cloned.resultUrl = out.url
+        else console.warn('[storageSignedUrl] result.json signing failed', out.error)
       }
     } else if (cloned.resultUrl && cloned.resultUrl.includes('storage.googleapis.com')) {
       const parsed = _extractPathFromStorageUrl(cloned.resultUrl)
@@ -118,11 +120,9 @@ async function attachSignedUrlsToJob(job, expiresMinutes = 30) {
           const f = useBucket.file(parsed.path)
           const [exists] = await f.exists()
           if (exists) {
-            try {
-              cloned.resultUrl = await getSignedUrlForPath(parsed.path, expiresMinutes, parsed.bucket)
-            } catch (err) {
-                  console.warn('[storageSignedUrl] failed to generate signed URL for resultUrl path', parsed.bucket || DEFAULT_BUCKET_NAME, parsed.path, err && err.message ? err.message : err)
-            }
+            const out = await getSignedUrlDetailed(parsed.path, expiresMinutes, parsed.bucket)
+            if (out.success) cloned.resultUrl = out.url
+            else console.warn('[storageSignedUrl] failed to generate signed URL for resultUrl path', parsed.bucket || DEFAULT_BUCKET_NAME, parsed.path, out.error)
           }
         } catch (e) {}
       }
@@ -134,11 +134,9 @@ async function attachSignedUrlsToJob(job, expiresMinutes = 30) {
         const f = bucket.file(cloned.finalVideoPath)
         const [exists] = await f.exists()
         if (exists) {
-          try {
-            cloned.videoUrl = await getSignedUrlForPath(cloned.finalVideoPath, expiresMinutes)
-          } catch (err) {
-            console.warn('[storageSignedUrl] failed to generate signed URL for finalVideoPath', cloned.finalVideoPath, err && err.message ? err.message : err)
-          }
+          const out = await getSignedUrlDetailed(cloned.finalVideoPath, expiresMinutes)
+          if (out.success) cloned.videoUrl = out.url
+          else console.warn('[storageSignedUrl] failed to generate signed URL for finalVideoPath', cloned.finalVideoPath, out.error)
         }
       } catch (e) {}
     }
@@ -176,10 +174,10 @@ async function attachSignedUrlsToJob(job, expiresMinutes = 30) {
               const f = useBucket.file(objPath)
               const [exists] = await f.exists()
               if (exists) {
-                try {
-                  out[k] = await getSignedUrlForPath(objPath, expiresMinutes, objBucket)
-                } catch (err) {
-                  console.warn('[storageSignedUrl] failed to generate signed URL for resultUrls key', k, objBucket || DEFAULT_BUCKET_NAME, objPath, err && err.message ? err.message : err)
+                const signed = await getSignedUrlDetailed(objPath, expiresMinutes, objBucket)
+                if (signed.success) out[k] = signed.url
+                else {
+                  console.warn('[storageSignedUrl] failed to generate signed URL for resultUrls key', k, objBucket || DEFAULT_BUCKET_NAME, objPath, signed.error)
                   out[k] = v
                 }
               }

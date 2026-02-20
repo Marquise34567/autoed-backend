@@ -358,6 +358,7 @@ router.post('/', async (req, res) => {
     // Persist queued job document and return immediately (no heavy work)
     try {
       const now = admin.firestore.FieldValue.serverTimestamp()
+      // Persist a canonical `inputPath` and keep `input` object for compatibility
       await db.collection('jobs').doc(jobId).set({
         id: jobId,
         userId: userId,

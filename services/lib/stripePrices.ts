@@ -27,6 +27,5 @@ export function resolvePriceId(planInput: string, intervalInput: string = 'month
   const price = map[interval]
   return price && price.length > 0 ? price : null
 }
-// Compatibility re-export: single source of truth is src/lib/stripePrices.ts
-export { STRIPE_PRICES, resolvePriceId } from './stripePrices'
+
 

@@ -37,7 +37,7 @@ export async function POST(req: NextRequest) {
 	try {
 		switch (event.type) {
 			case 'checkout.session.completed': {
-				const session = event.data.object as Stripe.Checkout.Session
+				const session = event.data.object as any
 				const uid = (session.metadata as any)?.uid as string | undefined
 				if (!uid) {
 					console.warn('[webhook] checkout.session.completed without uid metadata')
@@ -49,7 +49,7 @@ export async function POST(req: NextRequest) {
 					break
 				}
 
-				const sub = await stripe.subscriptions.retrieve(session.subscription as string)
+				const sub = await stripe.subscriptions.retrieve(session.subscription as string) as any
 				const status = sub.status
 				const plan = (sub.metadata?.plan as string) || (session.metadata?.plan as string) || null
 				const currentPeriodEnd = sub.current_period_end ? sub.current_period_end * 1000 : null
@@ -69,7 +69,7 @@ export async function POST(req: NextRequest) {
 
 			case 'customer.subscription.created':
 			case 'customer.subscription.updated': {
-				const sub = event.data.object as Stripe.Subscription
+				const sub = event.data.object as any
 				const uidFromMeta = sub.metadata?.uid as string | undefined
 				let userRef = null
 
@@ -104,7 +104,7 @@ export async function POST(req: NextRequest) {
 			}
 
 			case 'customer.subscription.deleted': {
-				const sub = event.data.object as Stripe.Subscription
+				const sub = event.data.object as any
 				// find user by subscription id
 				const q = await db.collection('users').where('stripeSubscriptionId', '==', sub.id).limit(1).get()
 				if (q.empty) {
