@@ -12,9 +12,11 @@
       "@supabase/*": ["services/lib/supabase/*"]
     },
     "esModuleInterop": true,
+    "allowJs": true,
     "moduleResolution": "node",
     "skipLibCheck": true,
     "strict": false
   },
-  "include": ["services/**/*", "index.ts", "index.js", "worker.js"]
+  "include": ["services/**/*", "**/*.ts", "index.js", "worker.js"],
+  "exclude": ["node_modules", "dist", "scripts"]
 }
