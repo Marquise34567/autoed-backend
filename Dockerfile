@@ -27,9 +27,11 @@ RUN apt-get update \
 WORKDIR /app
 
 # Copy only what we need from build stage
-COPY --from=build /app/dist ./dist
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/package.json ./package.json
+COPY --from=build /app/index.js ./index.js
+COPY --from=build /app/worker.js ./worker.js
+COPY --from=build /app/services ./services
 
 # Non-root user
 RUN useradd -ms /bin/bash appuser || true
