@@ -1,5 +1,5 @@
 # Dockerfile for Auto-Editor backend (Node + ffmpeg)
-FROM node:18-bullseye-slim
+FROM node:18-slim
 
 # Install ffmpeg + tini
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -22,7 +22,10 @@ RUN npm ci --omit=dev
 COPY . .
 
 # Build if needed (project may be TypeScript)
-RUN if [ -f package.json ] && grep -q "tsc" package.json || exit 0; then npm run build || true; fi
+# Only run build when `tsc` appears in `package.json` scripts
+RUN if [ -f package.json ] && grep -q '"tsc"' package.json; then \
+      npm run build || true; \
+    fi
 
 # Use a non-root user
 RUN useradd -ms /bin/bash appuser || true
