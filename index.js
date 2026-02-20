@@ -785,15 +785,32 @@ const server = app.listen(PORT, '0.0.0.0', () => {
   try {
     const workerEnabled = String(process.env.WORKER_ENABLED) === 'true'
     console.log('[worker] WORKER_ENABLED=', process.env.WORKER_ENABLED, '-> start?', workerEnabled)
-    if (workerEnabled) {
-      if (worker && typeof worker.start === 'function') {
-        worker.start()
-        console.log('[worker] worker.start() invoked from index.js')
-      } else {
-        console.log('[worker] worker module missing start()')
-      }
-    } else {
+    if (!workerEnabled) {
       console.log('[worker] WORKER_ENABLED not true; skipping start')
+    } else {
+      const dbUrl = process.env.DATABASE_URL
+      if (!dbUrl) {
+        console.log('[worker] DATABASE_URL not set; skipping worker start')
+      } else {
+        try {
+          const { testConnection } = require('./services/db')
+          ;(async () => {
+            const ok = await testConnection()
+            if (ok) {
+              if (worker && typeof worker.start === 'function') {
+                worker.start()
+                console.log('[worker] worker.start() invoked from index.js')
+              } else {
+                console.log('[worker] worker module missing start()')
+              }
+            } else {
+              console.log('[worker] DB testConnection failed; skipping worker start')
+            }
+          })().catch(err => console.error('[worker] async start failed', err && (err.stack || err.message || err)))
+        } catch (e) {
+          console.error('[worker] failed to require services/db', e && (e.stack || e.message || e))
+        }
+      }
     }
   } catch (e) {
     console.error('[startup] failed to start worker', e && (e.stack || e.message || e))
