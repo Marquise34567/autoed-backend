@@ -36,6 +36,15 @@ function normalizeJobRecord(raw) {
   return job
 }
 
+function parseGsUri(gsUri) {
+  if (!gsUri || typeof gsUri !== 'string') return null
+  if (!gsUri.startsWith('gs://')) return null
+  const rest = gsUri.slice('gs://'.length)
+  const i = rest.indexOf('/')
+  if (i === -1) return null
+  return { bucket: rest.slice(0, i), path: rest.slice(i + 1) }
+}
+
 // In-memory job store for now
 const jobs = new Map()
 
@@ -72,12 +81,21 @@ router.get('/', async (req, res) => {
             } catch (e) { console.warn('[jobs] failed to mark legacy completed job as failed', e && (e.stack || e.message || e)) }
             return res.status(200).json({ ok: true, jobId: norm.id || qid, status: 'failed', progress: 100, resultUrl: null, finalVideoPath: null, errorMessage: 'Legacy job missing resultUrl', updatedAt: norm.updatedAt || null })
           }
+          // If job completed and has an outputPath, attach a signed download URL
+          let downloadUrl = null
+          const possibleOutput = (job && (job.outputPath || job.finalVideoPath || job.resultPath)) || null
+          try {
+            if (norm.status === 'completed' && possibleOutput) {
+              downloadUrl = await getSignedUrlForPath(possibleOutput, 60)
+            }
+          } catch (e) { console.warn('[jobs] failed to generate signed URL for job GET', e && (e.message || e)) }
+
           const out = {
             ok: true,
             jobId: norm.id || qid,
             status: norm.status || 'queued',
             progress: Number.isFinite(Number(norm.progress)) ? Number(norm.progress) : null,
-            resultUrl: norm.resultUrl || null,
+            resultUrl: downloadUrl || norm.resultUrl || null,
             finalVideoPath: norm.finalVideoPath || null,
             errorMessage: norm.errorMessage || norm.error || null,
             error: norm.errorMessage || norm.error || null,
@@ -141,12 +159,20 @@ router.get('/:id', async (req, res) => {
             return res.status(200).json({ ok: true, job: outFail })
           }
           // Return a consistent, minimal job view for frontend
+          let downloadUrl = null
+          const possibleOutput = job && (job.outputPath || job.finalVideoPath || job.resultPath) || null
+          try {
+            if (job.status === 'completed' && possibleOutput) {
+              downloadUrl = await getSignedUrlForPath(possibleOutput, 60)
+            }
+          } catch (e) { console.warn('[jobs] failed to generate signed URL for job GET/:id', e && (e.message || e)) }
+
           const out = {
             id: job.id,
             status: job.status,
             progress: job.progress,
             errorMessage: job.errorMessage || null,
-            resultUrl: job.resultUrl || job.outputUrl || null
+            resultUrl: downloadUrl || job.resultUrl || job.outputUrl || null
           }
           return res.status(200).json({ ok: true, job: out })
         }
@@ -224,25 +250,42 @@ router.get('/:id/output-url', async (req, res) => {
     const snap = await db.collection('jobs').doc(id).get()
     if (!snap.exists) return res.status(404).json({ ok: false, error: 'Job not found' })
     const job = snap.data() || {}
-    // Prefer canonical fields for output path
-    const outputPath = job.outputPath || job.resultPath || job.finalVideoPath || job.outputFile || null
-    if (!outputPath) {
-      console.log('[output-url] jobId=' + id + ' outputPath missing -> not_ready')
+    // Prefer explicit output references. Support either outputGsUri (gs://...) or outputBucket+outputPath.
+    let ref = null
+    if (job.outputGsUri && job.outputGsUri.startsWith && job.outputGsUri.startsWith('gs://')) {
+      ref = parseGsUri(job.outputGsUri)
+    } else if (job.outputBucket && job.outputPath) {
+      ref = { bucket: job.outputBucket, path: job.outputPath }
+    } else if (job.outputPath) {
+      const envBucket = process.env.FIREBASE_STORAGE_BUCKET ? String(process.env.FIREBASE_STORAGE_BUCKET).replace(/^gs:\/\//i, '').trim() : null
+      ref = { bucket: envBucket, path: job.outputPath }
+    }
+
+    if (!ref || !ref.bucket || !ref.path) {
+      console.log('[output-url] jobId=' + id + ' missing output ref -> not_ready')
       return res.status(409).json({ status: 'not_ready', message: 'Output not available yet', jobId: id, phase: job.phase || job.status || null })
     }
-    console.log('[output-url] jobId=' + id + ' outputPath=' + outputPath + ' checking existence')
+
+    console.log('[output-url] jobId=' + id + ' checking bucket=' + ref.bucket + ' path=' + ref.path)
     try {
-      const url = await getSignedUrlForPath(outputPath, 15)
+      // Verify the object exists before attempting to sign
+      const file = admin.storage().bucket(ref.bucket).file(ref.path)
+      const [exists] = await file.exists()
+      if (!exists) {
+        console.log('[output-url] jobId=' + id + ' output not found in bucket')
+        return res.status(404).json({ ok: false, error: 'output_not_found', bucket: ref.bucket, path: ref.path })
+      }
+
+      const url = await getSignedUrlForPath(ref.path, 15, ref.bucket)
       const expiresAt = Date.now() + (15 * 60 * 1000)
       console.log('[output-url] jobId=' + id + ' signed url generated')
-      return res.status(200).json({ ok: true, url, expiresAt })
+      return res.status(200).json({ ok: true, url, expiresAt, bucket: ref.bucket, path: ref.path })
     } catch (e) {
       const msg = e && e.message ? e.message : String(e)
-      if (msg.includes('Storage object not found')) {
-        console.log('[output-url] jobId=' + id + ' outputPath exists check -> not uploaded yet')
+      console.error('[output-url] jobId=' + id + ' error generating signed url', e && (e.stack || e.message || e))
+      if (msg.includes('Storage object not found') || msg.includes('Output file missing')) {
         return res.status(409).json({ status: 'not_ready', message: 'Output not uploaded yet', jobId: id, phase: job.phase || job.status || null })
       }
-      console.error('[output-url] jobId=' + id + ' error generating signed url', e && (e.stack || e.message || e))
       return res.status(500).json({ ok: false, error: 'failed_to_generate_signed_url' })
     }
   } catch (e) {
@@ -275,7 +318,7 @@ router.post('/', async (req, res) => {
   try {
     jlog('job_post_incoming')
 
-    // Basic user validation: require an Authorization header or explicit userId in body
+    // Basic user validation: prefer explicit userId in body, otherwise verify Bearer token to extract Firebase UID
     const body = req.body || {}
     const authHeader = req.headers && req.headers.authorization
     let userId = body.userId || null
@@ -288,7 +331,7 @@ router.post('/', async (req, res) => {
           if (decoded && decoded.uid) userId = decoded.uid
         }
       } catch (e) {
-        console.warn('[jobs] failed to verify auth token, falling back to provided userId/text')
+        console.warn('[jobs] failed to verify auth token, falling back to provided userId/text', e && (e.message || e))
       }
     }
     if (!userId) return res.status(401).json({ ok: false, error: 'missing_user' })
@@ -324,8 +367,14 @@ router.post('/', async (req, res) => {
         progress: 0,
         createdAt: now,
         updatedAt: now,
+        // canonical input field for worker
         inputPath: storagePath,
         input: inputSpec,
+        // placeholders for outputs
+        outputPath: null,
+        resultUrl: null,
+        error: null,
+        message: null,
       }, { merge: true })
     } catch (err) {
       console.error('[jobs] JOB_PERSIST_ERROR', err && (err.stack || err.message || err))
