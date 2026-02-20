@@ -1,11 +1,11 @@
 # Dockerfile for Auto-Editor backend (Node + ffmpeg)
-FROM node:18-slim
+FROM debian:bookworm-slim
 
-# Install ffmpeg + tini
-RUN apt-get update && apt-get install -y --no-install-recommends \
-  ffmpeg \
-  ca-certificates \
-  wget \
+# Install Node.js (18.x) from NodeSource, ffmpeg and essential tools
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends curl ca-certificates gnupg wget lsb-release \
+  && curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
+  && apt-get install -y --no-install-recommends nodejs ffmpeg \
   && rm -rf /var/lib/apt/lists/*
 
 # Create app directory
