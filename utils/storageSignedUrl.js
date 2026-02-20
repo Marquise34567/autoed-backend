@@ -11,11 +11,8 @@ function getBucketObj(name) {
 function _normalizePath(p) {
   if (!p || typeof p !== 'string') return ''
   let s = p.trim()
-  // remove leading gs://bucket/ if present
   s = s.replace(/^gs:\/\/[\w.-]+\//i, '')
-  // remove leading slashes
   s = s.replace(/^\/+/, '')
-  // collapse multiple slashes
   s = s.replace(/\/+/g, '/')
   return s
 }
@@ -33,7 +30,6 @@ async function getSignedUrlDetailed(objectPath, expiresMinutes = 30, bucketName 
     const file = useBucket.file(normalized)
     let [exists] = await file.exists()
     if (!exists) {
-      // try alternate normalization (remove duplicate segments)
       const alt = normalized.replace(/(^|\/)\.+(\/|$)/g, '/')
       if (alt !== normalized) {
         const altFile = useBucket.file(alt)
@@ -58,7 +54,6 @@ async function getSignedUrlDetailed(objectPath, expiresMinutes = 30, bucketName 
       const [url] = await file.getSignedUrl({ version: 'v4', action: 'read', expires })
       return { success: true, url, error: null }
     } catch (err) {
-      // retry once after re-normalizing/encoding
       try {
         const retryPath = encodeURI(normalized)
         attempted.path = retryPath
@@ -82,7 +77,6 @@ async function getSignedUrlDetailed(objectPath, expiresMinutes = 30, bucketName 
   }
 }
 
-// Backwards compatible simple wrapper that throws on error
 async function getSignedUrlForPath(objectPath, expiresMinutes = 30, bucketName = null) {
   const res = await getSignedUrlDetailed(objectPath, expiresMinutes, bucketName)
   if (res.success) return res.url
