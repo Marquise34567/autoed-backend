@@ -793,22 +793,31 @@ const server = app.listen(PORT, '0.0.0.0', () => {
         console.log('[worker] DATABASE_URL not set; skipping worker start')
       } else {
         try {
-          const { testConnection } = require('./services/db')
-          ;(async () => {
-            const ok = await testConnection()
-            if (ok) {
-              if (worker && typeof worker.start === 'function') {
-                worker.start()
-                console.log('[worker] worker.start() invoked from index.js')
+          const fs = require('fs')
+          const cand = ['./services/db.js', './dist/services/db.js', './services/db.ts']
+          const found = cand.find(p => {
+            try { return fs.existsSync(p) } catch (e) { return false }
+          })
+          if (!found) {
+            console.log('[worker] services/db not present in container; skipping worker start')
+          } else {
+            const { testConnection } = require(found)
+            ;(async () => {
+              const ok = await testConnection()
+              if (ok) {
+                if (worker && typeof worker.start === 'function') {
+                  worker.start()
+                  console.log('[worker] worker.start() invoked from index.js')
+                } else {
+                  console.log('[worker] worker module missing start()')
+                }
               } else {
-                console.log('[worker] worker module missing start()')
+                console.log('[worker] DB testConnection failed; skipping worker start')
               }
-            } else {
-              console.log('[worker] DB testConnection failed; skipping worker start')
-            }
-          })().catch(err => console.error('[worker] async start failed', err && (err.stack || err.message || err)))
+            })().catch(err => console.error('[worker] async start failed', err && (err.stack || err.message || err)))
+          }
         } catch (e) {
-          console.error('[worker] failed to require services/db', e && (e.stack || e.message || e))
+          console.error('[worker] unexpected error while checking services/db', e && (e.stack || e.message || e))
         }
       }
     }
