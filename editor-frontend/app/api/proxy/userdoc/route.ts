@@ -1,8 +1,16 @@
 import { NextResponse } from "next/server";
 
+// Ensure this app route is rendered at runtime (uses `headers`/request data)
+export const dynamic = "force-dynamic";
+
 function backend() {
-  let raw = process.env.BACKEND_URL || "";
-  if (!raw) throw new Error("BACKEND_URL missing (set in Vercel).");
+  // Prefer server BACKEND_URL, fall back to NEXT_PUBLIC_API_BASE_URL for local/dev
+  let raw = process.env.BACKEND_URL || process.env.NEXT_PUBLIC_API_BASE_URL || "";
+  if (!raw) {
+    // Don't throw during build; warn and return empty so build can finish.
+    console.warn("BACKEND_URL not set — proxy calls will fail at runtime");
+    return "";
+  }
 
   raw = raw.trim().replace(/\/+$/, "");
   if (!raw.startsWith("http://") && !raw.startsWith("https://")) {

@@ -8,6 +8,26 @@ exports.getFirestore = getFirestore;
 exports.withTimeout = withTimeout;
 const firebase_admin_1 = __importDefault(require("firebase-admin"));
 function getCredential() {
+    // Support two modes: individual FIREBASE_* env vars or a single
+    // FIREBASE_SERVICE_ACCOUNT_JSON containing the service account JSON.
+    if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
+        try {
+            const sa = typeof process.env.FIREBASE_SERVICE_ACCOUNT_JSON === 'string'
+                ? JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON)
+                : process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+            const projectId = sa.project_id || sa.projectId;
+            const clientEmail = sa.client_email || sa.clientEmail;
+            const privateKey = sa.private_key;
+            if (!projectId || !clientEmail || !privateKey) {
+                throw new Error('Service account JSON missing required fields');
+            }
+            return firebase_admin_1.default.credential.cert({ projectId, clientEmail, privateKey });
+        }
+        catch (err) {
+            throw new Error('Failed to parse FIREBASE_SERVICE_ACCOUNT_JSON: ' + (err && err.message || err));
+        }
+    }
+
     const projectId = process.env.FIREBASE_PROJECT_ID;
     const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
     const privateKeyRaw = process.env.FIREBASE_PRIVATE_KEY;

@@ -721,18 +721,19 @@ async function processJob(jobId, inputSpec) {
     }
 
     // If a local output file exists, upload it to outputs/<uid>/<jobId>.mp4
-    const uid = (jobDoc && jobDoc.userId) ? String(jobDoc.userId) : (jobDoc && jobDoc.user && jobDoc.user.id ? String(jobDoc.user.id) : 'unknown')
-    const outputPath = `outputs/${uid}/${jobId}.mp4`
+    // Avoid redeclaring `uid` (declared earlier); use a separate local name.
+    const outputUid = (jobDoc && jobDoc.userId) ? String(jobDoc.userId) : (jobDoc && jobDoc.user && jobDoc.user.id ? String(jobDoc.user.id) : 'unknown')
+    const finalOutputPath = `outputs/${outputUid}/${jobId}.mp4`
     let outputUrl = null
     let uploaded = false
     try {
       if (fs.existsSync(localOut)) {
         const bucketObj = getBucketObject()
-        jlog('upload_output_start', { dest: outputPath })
-        console.log(`[worker] uploading output ${localOut} -> ${outputPath}`)
-        await bucketObj.upload(localOut, { destination: outputPath, metadata: { contentType: 'video/mp4' } })
+        jlog('upload_output_start', { dest: finalOutputPath })
+        console.log(`[worker] uploading output ${localOut} -> ${finalOutputPath}`)
+        await bucketObj.upload(localOut, { destination: finalOutputPath, metadata: { contentType: 'video/mp4' } })
         // verify object exists
-        const f = bucketObj.file(outputPath)
+        const f = bucketObj.file(finalOutputPath)
         let exists = false
         try {
           const existsRes = await f.exists()
@@ -743,8 +744,8 @@ async function processJob(jobId, inputSpec) {
         uploaded = true
         try {
           // Use detailed signing which verifies existence and returns structured info
-          const { getSignedUrlDetailed } = require('../../utils/storageSignedUrl')
-          const signRes = await getSignedUrlDetailed(outputPath, 60)
+            const { getSignedUrlDetailed } = require('../../utils/storageSignedUrl')
+          const signRes = await getSignedUrlDetailed(finalOutputPath, 60)
           if (signRes && signRes.success) {
             outputUrl = signRes.url
           } else {

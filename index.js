@@ -42,15 +42,12 @@ function validateStartupEnv() {
     if (!process.env.FIREBASE_CLIENT_EMAIL) missing.push('FIREBASE_CLIENT_EMAIL')
     if (!process.env.FIREBASE_PRIVATE_KEY) missing.push('FIREBASE_PRIVATE_KEY')
   }
-  const queueVars = ['REDIS_URL', 'REDIS_HOST', 'REDIS_PORT']
-  const queueMissing = queueVars.filter(k => !process.env[k])
   if (missing.length > 0) {
     console.error(JSON.stringify({ ts: new Date().toISOString(), error: 'MISSING_ENV_VARS', missing }))
     try { process.exit(1) } catch (e) { /* best-effort */ }
   }
-  if (queueMissing.length > 0) {
-    console.log(JSON.stringify({ ts: new Date().toISOString(), note: 'QUEUE_ENV_MISSING', missing: queueMissing }))
-  }
+  // Redis/queue env vars were removed — do not require Redis at startup.
+  // Any optional queue configuration will be handled where used.
 }
 
 validateStartupEnv()
@@ -581,81 +578,100 @@ app.get('/api/userdoc', (_req, res) => res.json({ ok: true }))
 // (More specific POST /api/upload-url fallback moved below so mounted router is used first.)
 
 // Mount existing route folders under /api when possible (non-fatal if module isn't an Express router)
-// Mount explicit routers under /api
-app.use('/api/health', require('./routes/health'))
-app.use('/api/ping', require('./routes/ping'))
-// Debug endpoints for verifying integrations (e.g., Firestore)
-try { app.use('/api/debug', require('./routes/debug/firestore')) } catch (e) { console.warn('[routes] failed to mount /api/debug', e && e.message ? e.message : e) }
-try { app.use('/api/debug/storage', require('./routes/debug/storage')) } catch (e) { console.warn('[routes] failed to mount /api/debug/storage', e && e.message ? e.message : e) }
-app.use("/api/jobs", require("./routes/jobs"))
-// Also mount non-/api path for backward compatibility (frontend may call /jobs)
-app.use("/jobs", require("./routes/jobs"))
-app.use('/api/job-status', require('./routes/job-status'))
-app.use('/api/userdoc', require('./routes/userdoc'))
-// Compatibility mounts: accept requests forwarded with or without /api and /proxy
-app.use('/userdoc', require('./routes/userdoc'))
-app.use('/proxy/userdoc', require('./routes/userdoc'))
-app.use('/api/proxy/userdoc', require('./routes/userdoc'))
-app.use('/api/proxy/api/userdoc', require('./routes/userdoc'))
-app.use('/api/proxy/jobs', require('./routes/jobs'))
-app.use('/api/proxy/api/jobs', require('./routes/jobs'))
-// Upload endpoint: accepts multipart/form-data and uploads to Firebase Storage
-try {
-  app.use('/api/upload', require('./routes/upload'))
-} catch (e) {
-  console.warn('[routes] failed to mount /api/upload', e && e.message ? e.message : e)
-}
-try {
-  // Mount inline signed-upload URL generator
-} catch (e) {
-  console.warn('[routes] failed to mount /api/upload', e && e.message ? e.message : e)
-}
-
-// Signed upload URL endpoint (direct-to-storage)
-app.post('/api/upload-url', async (req, res) => {
+// Mount explicit routers under /api. Do this asynchronously so the HTTP server
+// can start quickly and accept health/ping requests while larger route modules
+// (which may import heavy deps) are loaded in the background.
+setImmediate(() => {
   try {
-    const body = req.body || {}
-    const fileName = body.fileName || body.filename || body.file_name || null
-    const contentType = body.contentType || body.content_type || body.contenttype || null
-
-    console.log('[upload-url] request body keys:', Object.keys(body))
-
-    if (!fileName || !contentType) {
-      return res.status(400).json({ error: 'fileName and contentType are required' })
-    }
-
-    // Temporary debug: surface key values for troubleshooting
-    try {
-      console.log('[upload-url] Bucket:', bucket && (bucket.name || bucket.id || '<unknown>'))
-      console.log('[upload-url] Filename:', fileName)
-      console.log('[upload-url] ContentType:', contentType)
-    } catch (e) {
-      console.warn('[upload-url] failed to log debug values', e)
-    }
-
-    const storagePath = `uploads/${Date.now()}-${fileName}`
-
-    const file = bucket.file(storagePath)
-
-    // Generate signed URL without signing Content-Type to avoid signature mismatch
-    const [uploadUrl] = await file.getSignedUrl({
-      version: 'v4',
-      action: 'write',
-      expires: new Date(Date.now() + 15 * 60 * 1000),
-    })
-
-    console.log('[upload-url] generated:', storagePath)
-
-    return res.json({
-      uploadUrl,
-      storagePath
-    })
-
-  } catch (error) {
-    console.error('[upload-url] ERROR:', error && (error.stack || error.message || error))
-    return res.status(500).json({ error: 'Failed to generate signed URL', details: error && error.message })
+    app.use('/api/health', require('./routes/health'))
+    app.use('/api/ping', require('./routes/ping'))
+  } catch (e) {
+    console.warn('[routes] failed to mount lightweight health routes', e && e.message ? e.message : e)
   }
-})
+
+  try { app.use('/api/debug', require('./routes/debug/firestore')) } catch (e) { console.warn('[routes] failed to mount /api/debug', e && e.message ? e.message : e) }
+  try { app.use('/api/debug/storage', require('./routes/debug/storage')) } catch (e) { console.warn('[routes] failed to mount /api/debug/storage', e && e.message ? e.message : e) }
+
+  try { app.use("/api/jobs", require("./routes/jobs")) } catch (e) { console.warn('[routes] failed to mount /api/jobs', e && e.message ? e.message : e) }
+  try { app.use("/jobs", require("./routes/jobs")) } catch (e) { console.warn('[routes] failed to mount /jobs', e && e.message ? e.message : e) }
+
+  try { app.use('/api/job-status', require('./routes/job-status')) } catch (e) { console.warn('[routes] failed to mount /api/job-status', e && e.message ? e.message : e) }
+  try { app.use('/api/userdoc', require('./routes/userdoc')) } catch (e) { console.warn('[routes] failed to mount /api/userdoc', e && e.message ? e.message : e) }
+
+  // Compatibility mounts: accept requests forwarded with or without /api and /proxy
+  try { app.use('/userdoc', require('./routes/userdoc')) } catch (e) { console.warn('[routes] failed to mount /userdoc', e && e.message ? e.message : e) }
+  try { app.use('/proxy/userdoc', require('./routes/userdoc')) } catch (e) { console.warn('[routes] failed to mount /proxy/userdoc', e && e.message ? e.message : e) }
+  try { app.use('/api/proxy/userdoc', require('./routes/userdoc')) } catch (e) { console.warn('[routes] failed to mount /api/proxy/userdoc', e && e.message ? e.message : e) }
+  try { app.use('/api/proxy/api/userdoc', require('./routes/userdoc')) } catch (e) { console.warn('[routes] failed to mount /api/proxy/api/userdoc', e && e.message ? e.message : e) }
+  try { app.use('/api/proxy/jobs', require('./routes/jobs')) } catch (e) { console.warn('[routes] failed to mount /api/proxy/jobs', e && e.message ? e.message : e) }
+  try { app.use('/api/proxy/api/jobs', require('./routes/jobs')) } catch (e) { console.warn('[routes] failed to mount /api/proxy/api/jobs', e && e.message ? e.message : e) }
+
+  // Upload endpoint: accepts multipart/form-data and uploads to Firebase Storage
+  try {
+    app.use('/api/upload', require('./routes/upload'))
+    console.log('Mounted /api/upload')
+  } catch (e) {
+    console.warn('[routes] failed to mount /api/upload', e && e.message ? e.message : e)
+  }
+
+  try {
+    // Mount inline signed-upload URL generator (placeholder)
+  } catch (e) {
+    console.warn('[routes] failed to mount /api/upload (inline)', e && e.message ? e.message : e)
+  }
+
+  // Signed upload URL endpoint (direct-to-storage)
+  try {
+    app.post('/api/upload-url', async (req, res) => {
+      try {
+        const body = req.body || {}
+        const fileName = body.fileName || body.filename || body.file_name || null
+        const contentType = body.contentType || body.content_type || body.contenttype || null
+
+        console.log('[upload-url] request body keys:', Object.keys(body))
+
+        if (!fileName || !contentType) {
+          return res.status(400).json({ error: 'fileName and contentType are required' })
+        }
+
+        // Temporary debug: surface key values for troubleshooting
+        try {
+          console.log('[upload-url] Bucket:', bucket && (bucket.name || bucket.id || '<unknown>'))
+          console.log('[upload-url] Filename:', fileName)
+          console.log('[upload-url] ContentType:', contentType)
+        } catch (e) {
+          console.warn('[upload-url] failed to log debug values', e)
+        }
+
+        const storagePath = `uploads/${Date.now()}-${fileName}`
+
+        const file = bucket.file(storagePath)
+
+        // Generate signed URL without signing Content-Type to avoid signature mismatch
+        const [uploadUrl] = await file.getSignedUrl({
+          version: 'v4',
+          action: 'write',
+          expires: new Date(Date.now() + 15 * 60 * 1000),
+        })
+
+        console.log('[upload-url] generated:', storagePath)
+
+        return res.json({
+          uploadUrl,
+          storagePath
+        })
+
+      } catch (error) {
+        console.error('[upload-url] ERROR:', error && (error.stack || error.message || error))
+        return res.status(500).json({ error: 'Failed to generate signed URL', details: error && error.message })
+      }
+    })
+  } catch (e) {
+    console.warn('[routes] failed to mount /api/upload-url', e && e.message ? e.message : e)
+  }
+
+} )
+
   // Mount upload-complete handler so clients can notify the server after a successful direct-to-storage upload.
   try { app.use('/api/upload-complete', require('./routes/upload-complete')) } catch (e) { console.warn('[routes] failed to mount /api/upload-complete', e && e.message ? e.message : e) }
 try { console.log('Mounted /api/upload') } catch (e) {}

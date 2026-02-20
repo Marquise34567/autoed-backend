@@ -11,9 +11,10 @@ function backend() {
   return raw;
 }
 
-function passAuth(req: Request) {
+function passAuth(req: Request): HeadersInit | undefined {
   const a = req.headers.get("authorization");
-  return a ? { authorization: a } : {};
+  if (!a) return undefined;
+  return { authorization: a };
 }
 
 async function readBody(res: Response) {
@@ -28,7 +29,7 @@ export async function GET(req: Request) {
 
     const res = await fetch(upstream, {
       method: "GET",
-      headers: { ...passAuth(req) },
+      headers: passAuth(req),
       cache: "no-store",
     });
 
@@ -47,7 +48,7 @@ export async function POST(req: Request) {
 
     const res = await fetch(upstream, {
       method: "POST",
-      headers: { "content-type": "application/json", ...passAuth(req) },
+      headers: Object.assign({ "content-type": "application/json" }, passAuth(req) || {}),
       body: JSON.stringify(payload),
     });
 
